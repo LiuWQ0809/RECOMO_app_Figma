@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Play, Camera, Zap, Music, MapPin, CheckCircle2, ChevronRight, Sparkles, Clock, Ruler, Wind, Video, Image as ImageIcon, UserPlus, Settings, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface TemplatePageProps {
@@ -225,7 +225,18 @@ export default function TemplatePreparePage({ template, onBack, onStartShooting 
                 <span className="caption text-[#00DC82] font-semibold">已完成</span>
               )}
             </div>
-            <SceneScanCard scanned={sceneScanned} onScan={() => setSceneScanned(true)} />
+            <SceneScanCard
+              scanned={sceneScanned}
+              onScan={() => setSceneScanned(true)}
+              projectId={template?.projectId}
+              videoUrl={template?.videoUrl}
+              templateKey={
+                template?.id ||
+                template?.videoUrl ||
+                template?.title ||
+                template?.sequenceName
+              }
+            />
           </div>
 
           {/* Step 2: Sequence 单元配置 */}
@@ -658,7 +669,19 @@ function ParamRow({
 }
 
 // 场景扫描卡片
-function SceneScanCard({ scanned, onScan }: { scanned: boolean; onScan: () => void }) {
+function SceneScanCard({
+  scanned,
+  onScan,
+  projectId,
+  videoUrl,
+  templateKey,
+}: {
+  scanned: boolean;
+  onScan: () => void;
+  projectId?: string;
+  videoUrl?: string;
+  templateKey?: string;
+}) {
   const [scanning, setScanning] = useState(false);
   const [showSimulator, setShowSimulator] = useState(false);
   const [showScanOptions, setShowScanOptions] = useState(false);
@@ -792,6 +815,8 @@ function SceneScanCard({ scanned, onScan }: { scanned: boolean; onScan: () => vo
           <SequenceSimulator 
             onClose={() => setShowSimulator(false)}
             scannedScene={scannedScene}
+            projectId={template?.projectId}
+            videoUrl={template?.videoUrl}
           />
         )}
       </>
@@ -854,6 +879,8 @@ function SceneScanCard({ scanned, onScan }: { scanned: boolean; onScan: () => vo
         <SequenceSimulator 
           onClose={() => setShowSimulator(false)}
           scannedScene={null} // null表示显示模板参考场景
+          projectId={projectId}
+          videoUrl={videoUrl}
         />
       )}
     </>
@@ -973,269 +1000,728 @@ function MusicMatchCard({ selectedMusic, onSelect, totalDuration }: { selectedMu
 }
 
 // Sequence 模拟器弹窗
-function SequenceSimulator({ onClose, scannedScene }: { onClose: () => void; scannedScene: any }) {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [viewAngle, setViewAngle] = useState<'top' | 'side' | 'follow' | 'free'>('top');
-  const [showComparison, setShowComparison] = useState(false);
-  const [currentUnit, setCurrentUnit] = useState(0);
-
-  // 模拟 sequence 单元
-  const sequenceUnits = [
-    { code: 'C2', name: '急速倒退', duration: 8, color: '#00A8E8' },
-    { code: 'S1', name: '静态特写', duration: 3, color: '#FFB800' },
-    { code: 'C1', name: '上升展开', duration: 6, color: '#00A8E8' },
-    { code: 'F1', name: '跟随摄', duration: 10, color: '#00DC82' },
-  ];
-
-  const totalDuration = sequenceUnits.reduce((sum, unit) => sum + unit.duration, 0);
-
-  // 播放控制
-  const togglePlay = () => {
-    setIsPlaying(!isPlaying);
-    if (!isPlaying) {
-      const interval = setInterval(() => {
-        setProgress(prev => {
-          if (prev >= 100) {
-            clearInterval(interval);
-            setIsPlaying(false);
-            return 100;
-          }
-          return prev + (100 / totalDuration) * 0.1;
-        });
-      }, 100);
+function SequenceSimulator({
+  onClose,
+  scannedScene,
+  projectId,
+  videoUrl,
+  templateKey,
+}: {
+  onClose: () => void;
+  scannedScene: any;
+  projectId?: string;
+  videoUrl?: string;
+  templateKey?: string;
+}) {
+  // 缓存工具（需在使用前定义，避免初始化引用错误）
+  const cacheKeyForVideo = (key: string) => `recomo_project_cache_${key}`;
+  const getCachedProjectId = (key?: string) => {
+    if (!key) return undefined;
+    try {
+      const cached = localStorage.getItem(cacheKeyForVideo(key));
+      return cached || undefined;
+    } catch (e) {
+      console.warn('读取缓存失败', e);
+      return undefined;
+    }
+  };
+  const setCachedProjectId = (key?: string, pid?: string) => {
+    if (!key || !pid) return;
+    try {
+      localStorage.setItem(cacheKeyForVideo(key), pid);
+    } catch (e) {
+      console.warn('写入缓存失败', e);
+    }
+  };
+  const clearCachedProjectId = (key?: string) => {
+    if (!key) return;
+    try {
+      localStorage.removeItem(cacheKeyForVideo(key));
+    } catch (e) {
+      console.warn('清除缓存失败', e);
     }
   };
 
-  // 根据进度计算当前单元
-  const getCurrentUnit = () => {
-    let accumulated = 0;
-    for (let i = 0; i < sequenceUnits.length; i++) {
-      accumulated += (sequenceUnits[i].duration / totalDuration) * 100;
-      if (progress <= accumulated) {
-        return i;
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [loading, setLoading] = useState(false);
+  const [viewerLoading, setViewerLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [stats, setStats] = useState({ points: 0, cameras: 0 });
+  const [sceneData, setSceneData] = useState<any>(scannedScene || null);
+  const [reconStatus, setReconStatus] = useState<string>('等待加载');
+  const [currentProjectId, setCurrentProjectId] = useState<string | undefined>(() => {
+    const key = templateKey || videoUrl;
+    return projectId || getCachedProjectId(key);
+  });
+  const statusTimer = useRef<any>(null);
+  const [lastTriedProject, setLastTriedProject] = useState<string | null>(null);
+  const forceNewRef = useRef(false);
+
+  const API_BASE = import.meta.env.VITE_SFM_API_BASE || 'http://192.168.100.100:7000/api';
+  const STATIC_BASE = API_BASE.replace(/\/api$/, '');
+
+  const resolveUrl = (url: string) => (url.startsWith('http') ? url : `${STATIC_BASE}${url}`);
+
+  const parseAsciiPly = (text: string) => {
+    const lines = text.split('\n');
+    let headerEnd = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].trim().toLowerCase() === 'end_header') {
+        headerEnd = i;
+        break;
       }
     }
-    return sequenceUnits.length - 1;
+    const points: any[] = [];
+    if (headerEnd === -1) return points;
+    const maxPoints = 100000; // 更严格的点数上限，加快加载
+    const step = Math.max(1, Math.floor((lines.length - headerEnd) / maxPoints));
+    for (let i = headerEnd + 1; i < lines.length; i += step) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      const parts = line.split(/\s+/).map(parseFloat);
+      if (parts.length >= 3) {
+        points.push({
+          x: parts[0],
+          y: parts[1],
+          z: parts[2],
+          r: parts.length >= 6 ? parts[3] / 255 : 0.7,
+          g: parts.length >= 6 ? parts[4] / 255 : 0.8,
+          b: parts.length >= 6 ? parts[5] / 255 : 1.0,
+        });
+      }
+    }
+    return points;
   };
 
-  const activeUnit = getCurrentUnit();
+  const parseTUMPose = (text: string) => {
+    const poses: any[] = [];
+    const lines = text.trim().split('\n');
+    for (const line of lines) {
+      if (!line.trim() || line.startsWith('#')) continue;
+      const parts = line.trim().split(/\s+/);
+      if (parts.length >= 8) {
+        poses.push({
+          x: parseFloat(parts[1]),
+          y: parseFloat(parts[2]),
+          z: parseFloat(parts[3]),
+          qx: parseFloat(parts[4]),
+          qy: parseFloat(parts[5]),
+          qz: parseFloat(parts[6]),
+          qw: parseFloat(parts[7]),
+        });
+      }
+    }
+    return poses;
+  };
+
+  const loadProjectData = async (pid?: string) => {
+    const effectiveId = pid || currentProjectId || projectId;
+    if (!effectiveId) {
+      setError('未提供项目ID，无法加载点云/轨迹');
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      console.log('[SequenceSimulator] 请求点云/轨迹, projectId:', effectiveId);
+      const pcResp = await fetch(`${API_BASE}/projects/${effectiveId}/pointcloud`);
+      const pcJson = await pcResp.json();
+      if (!pcJson.pointcloud_url) {
+        throw new Error('未找到点云文件 (sparse_ascii.ply 或 sparse.ply)');
+      }
+      console.log('[SequenceSimulator] 点云URL:', pcJson.pointcloud_url);
+      const posesResp = await fetch(`${API_BASE}/projects/${effectiveId}/poses`);
+      const posesJson = await posesResp.json();
+      console.log('[SequenceSimulator] 轨迹URL:', posesJson.poses_url);
+
+      const plyUrl = resolveUrl(pcJson.pointcloud_url);
+      const plyText = await (await fetch(plyUrl, { cache: 'no-cache' })).text();
+      console.log('[SequenceSimulator] 点云文本长度:', plyText.length);
+      const points = parseAsciiPly(plyText);
+      if (!points.length) throw new Error('点云解析为空，请确认PLY为ASCII格式');
+
+      let cameraPath: any[] = [];
+      if (posesJson.poses_url) {
+        const posesUrl = resolveUrl(posesJson.poses_url);
+        const posesText = await (await fetch(posesUrl, { cache: 'no-cache' })).text();
+        console.log('[SequenceSimulator] 轨迹文本长度:', posesText.length);
+        cameraPath = parseTUMPose(posesText);
+      }
+
+      setSceneData({ points, cameraPath });
+      setStats({ points: points.length, cameras: cameraPath.length });
+    setViewerLoading(true); // 让下方渲染流程重新显示loading遮罩
+  } catch (err: any) {
+    console.error(err);
+    setError(err?.message || '加载失败');
+  } finally {
+    setLoading(false);
+  }
+  };
+
+  const fetchStatus = async (pid: string) => {
+    console.log('[SequenceSimulator] 查询状态', pid);
+    const resp = await fetch(`${API_BASE}/projects/${pid}/status`, { cache: 'no-cache' });
+    if (!resp.ok) throw new Error(`状态请求失败 ${resp.status}`);
+    return resp.json();
+  };
+
+  const startReconstruct = async (pid: string) => {
+    console.log('[SequenceSimulator] 启动重建', pid);
+    await fetch(`${API_BASE}/projects/${pid}/reconstruct?script_type=full`, { method: 'POST' });
+  };
+
+  const uploadVideoAndCreate = async () => {
+    if (!videoUrl) throw new Error('缺少视频URL，无法创建项目');
+    // 优先使用缓存的 projectId（按模板key或视频URL）
+    const cacheKey = templateKey || videoUrl;
+    const cached = forceNewRef.current ? undefined : getCachedProjectId(cacheKey);
+    if (cached) {
+      console.log('[SequenceSimulator] 使用缓存的项目ID:', cached);
+      setCurrentProjectId(cached);
+      return cached;
+    }
+    setReconStatus('上传视频中...');
+    const absoluteUrl = videoUrl.startsWith('http') ? videoUrl : `${window.location.origin}${videoUrl}`;
+    console.log('[SequenceSimulator] 下载视频并上传创建项目', absoluteUrl);
+    const blobResp = await fetch(absoluteUrl);
+    if (!blobResp.ok) throw new Error(`下载视频失败 ${blobResp.status}`);
+    const blob = await blobResp.blob();
+    const form = new FormData();
+    form.append('file', new File([blob], 'reference.mp4', { type: 'video/mp4' }));
+    form.append('group', '默认组');
+    form.append('force_new', forceNewRef.current ? 'true' : 'false');
+    const uploadResp = await fetch(`${API_BASE}/upload`, { method: 'POST', body: form });
+    if (!uploadResp.ok) throw new Error(`上传接口失败 ${uploadResp.status}`);
+    const uploadJson = await uploadResp.json();
+    const pid = uploadJson.project_id;
+    if (!pid) throw new Error('上传接口未返回项目ID');
+    console.log('[SequenceSimulator] 新建项目ID:', pid);
+    setCurrentProjectId(pid);
+    setCachedProjectId(cacheKey, pid);
+    forceNewRef.current = false;
+    return pid;
+  };
+
+  const isMissingProject = (statusObj: any) => {
+    const msg = (statusObj?.status || '').toString();
+    return (
+      msg.includes('No such file') ||
+      msg.includes('不存在') ||
+      msg.includes('没有这样的文件') ||
+      msg.includes('not found')
+    );
+  };
+
+  const ensureDataReady = async (retrying = false) => {
+    if (scannedScene) {
+      setReconStatus('使用已扫描场景');
+      setViewerLoading(false);
+      return;
+    }
+    let pid = projectId || currentProjectId || getCachedProjectId(templateKey || videoUrl);
+    if (!pid && videoUrl) {
+      try {
+        pid = await uploadVideoAndCreate();
+      } catch (err) {
+        throw err;
+      }
+    }
+    if (!pid) {
+      setError('未找到项目ID且无法从视频创建，请检查模板是否包含 videoUrl 或 projectId');
+      setViewerLoading(false);
+      return;
+    }
+    // 写入缓存，避免后续重复重建
+    setCachedProjectId(templateKey || videoUrl, pid);
+      setCurrentProjectId(pid);
+      setCachedProjectId(templateKey || videoUrl, pid);
+    setError(null);
+    setReconStatus('检查重建状态...');
+    try {
+      const status = await fetchStatus(pid);
+      setReconStatus(status.status || '未知');
+      console.log('[SequenceSimulator] 初始状态', status);
+
+      if (isMissingProject(status)) {
+        console.warn('[SequenceSimulator] 项目缺失，准备重新创建');
+        clearCachedProjectId(templateKey || videoUrl);
+        forceNewRef.current = true;
+        setCurrentProjectId(undefined);
+        if (retrying) {
+          setError('项目缺失且重建重试失败');
+          setViewerLoading(false);
+          return;
+        }
+        const newPid = await uploadVideoAndCreate();
+        if (!newPid) {
+          setError('项目缺失且无法重新创建');
+          setViewerLoading(false);
+          return;
+        }
+        return ensureDataReady(true);
+      }
+
+      const needsRun = !status.has_pointcloud && !status.has_camera_poses;
+      if (needsRun && status.status !== '执行中') {
+        setReconStatus('启动重建...');
+        await startReconstruct(pid);
+      }
+
+      if (statusTimer.current) clearInterval(statusTimer.current);
+      statusTimer.current = setInterval(async () => {
+        try {
+          const st = await fetchStatus(pid!);
+          setReconStatus(st.status || '执行中');
+          console.log('[SequenceSimulator] 轮询状态', st);
+          if (isMissingProject(st)) {
+            console.warn('[SequenceSimulator] 轮询检测到项目缺失，准备重新创建');
+            clearInterval(statusTimer.current);
+            statusTimer.current = null;
+            clearCachedProjectId(templateKey || videoUrl);
+            forceNewRef.current = true;
+            setCurrentProjectId(undefined);
+            await ensureDataReady(true);
+            return;
+          }
+          if (st.has_pointcloud || st.has_camera_poses || (st.status && st.status.includes('完成'))) {
+            clearInterval(statusTimer.current);
+            statusTimer.current = null;
+            await loadProjectData(pid!);
+          }
+        } catch (pollErr) {
+          console.error(pollErr);
+        }
+      }, 2000);
+
+      // 如果已有数据，直接加载
+      if (!needsRun) {
+        await loadProjectData(pid);
+      }
+      setLastTriedProject(pid);
+    } catch (err: any) {
+      console.error(err);
+      setError(err?.message || '重建状态检查失败');
+      setViewerLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    // 当提供了projectId且没有scannedScene时自动加载
+    if ((projectId || templateKey || videoUrl) && !scannedScene) {
+      ensureDataReady();
+    }
+    return () => {
+      if (statusTimer.current) {
+        clearInterval(statusTimer.current);
+        statusTimer.current = null;
+      }
+    };
+  }, [projectId, scannedScene, templateKey, videoUrl]);
+
+  useEffect(() => {
+    let renderer: any = null;
+    let controls: any = null;
+    let animationId: number;
+    let resizeHandler: (() => void) | null = null;
+
+    const init = async () => {
+      try {
+        const THREE = await import('three');
+        const { OrbitControls } = await import('three/examples/jsm/controls/OrbitControls.js');
+        const container = containerRef.current;
+        if (!container) throw new Error('容器未初始化');
+
+        const data =
+          sceneData && sceneData.points && sceneData.points.length
+            ? sceneData
+            : {
+                points: generateMockPointCloud(2000),
+                cameraPath: generateMockCameraPath(),
+              };
+
+        const width = container.clientWidth || 360;
+        const height = container.clientHeight || 640;
+
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(width, height);
+        renderer.setPixelRatio(window.devicePixelRatio || 1);
+        container.appendChild(renderer.domElement);
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0b0c10);
+
+        const camera = new THREE.PerspectiveCamera(60, width / height, 0.01, 50);
+        camera.position.set(1.2, 0.9, 1.4);
+
+        controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.target.set(0, 0, 0);
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+        dirLight.position.set(2, 3, 2);
+        scene.add(dirLight);
+        scene.add(new THREE.GridHelper(4, 24, 0x333333, 0x1f1f1f));
+        scene.add(new THREE.AxesHelper(0.4));
+
+        // 翻转Y轴让点云/轨迹方向正确
+        const pointsData = data.points.map((p: any) => ({
+          ...p,
+          y: -p.y,
+        }));
+        const positions = new Float32Array(pointsData.length * 3);
+        const colors = new Float32Array(pointsData.length * 3);
+        pointsData.forEach((p: any, i: number) => {
+          positions[i * 3] = p.x;
+          positions[i * 3 + 1] = p.y;
+          positions[i * 3 + 2] = p.z;
+          colors[i * 3] = p.r ?? 0.7;
+          colors[i * 3 + 1] = p.g ?? 0.8;
+          colors[i * 3 + 2] = p.b ?? 1.0;
+        });
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        const cloud = new THREE.Points(
+          geometry,
+          new THREE.PointsMaterial({
+            size: 0.005,
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.9,
+            sizeAttenuation: true,
+          })
+        );
+        scene.add(cloud);
+
+        const pathData =
+          data.cameraPath && data.cameraPath.length >= 2
+            ? data.cameraPath.map((p: any) => ({ ...p, y: -p.y }))
+            : generateMockCameraPath();
+        const lineGeometry = new THREE.BufferGeometry().setFromPoints(
+          pathData.map((p: any) => new THREE.Vector3(p.x, p.y, p.z))
+        );
+        const line = new THREE.Line(
+          lineGeometry,
+          new THREE.LineBasicMaterial({ color: 0x00a8e8, linewidth: 2 })
+        );
+        scene.add(line);
+
+        // 轨迹使用视锥体替代球体，参考 service_for_sfm
+        const cameraRange = (() => {
+          const xs = pathData.map((p: any) => p.x);
+          const ys = pathData.map((p: any) => p.y);
+          const zs = pathData.map((p: any) => p.z);
+          return {
+            x: Math.max(...xs) - Math.min(...xs),
+            y: Math.max(...ys) - Math.min(...ys),
+            z: Math.max(...zs) - Math.min(...zs),
+          };
+        })();
+        const cameraSpan = (cameraRange.x + cameraRange.y + cameraRange.z) / 3;
+        const frustumScale = Math.max(cameraSpan * 0.05, 0.01);
+        const maxFrustums = 120;
+        const stride = Math.max(1, Math.floor(pathData.length / maxFrustums));
+
+        const createCameraFrustum = (pose: any, color = 0x00ff00, size = 0.05) => {
+          const group = new THREE.Group();
+          const near = size * 0.3;
+          const far = size * 1.5;
+          const aspect = 1.33;
+          const fov = 60;
+          const halfHeightNear = near * Math.tan(THREE.MathUtils.degToRad(fov / 2));
+          const halfWidthNear = halfHeightNear * aspect;
+          const halfHeightFar = far * Math.tan(THREE.MathUtils.degToRad(fov / 2));
+          const halfWidthFar = halfHeightFar * aspect;
+
+          const vertices = [
+            new THREE.Vector3(-halfWidthNear, -halfHeightNear, near),
+            new THREE.Vector3(halfWidthNear, -halfHeightNear, near),
+            new THREE.Vector3(halfWidthNear, halfHeightNear, near),
+            new THREE.Vector3(-halfWidthNear, halfHeightNear, near),
+            new THREE.Vector3(-halfWidthFar, -halfHeightFar, far),
+            new THREE.Vector3(halfWidthFar, -halfHeightFar, far),
+            new THREE.Vector3(halfWidthFar, halfHeightFar, far),
+            new THREE.Vector3(-halfWidthFar, halfHeightFar, far),
+          ];
+
+          const lineVertices: number[] = [];
+          for (let i = 0; i < 4; i++) {
+            lineVertices.push(...vertices[i].toArray(), ...vertices[(i + 1) % 4].toArray());
+          }
+          for (let i = 4; i < 8; i++) {
+            lineVertices.push(...vertices[i].toArray(), ...vertices[4 + (i + 1) % 4].toArray());
+          }
+          for (let i = 0; i < 4; i++) {
+            lineVertices.push(...vertices[i].toArray(), ...vertices[i + 4].toArray());
+          }
+
+          const lineGeometry = new THREE.BufferGeometry();
+          lineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(lineVertices, 3));
+          const lineMaterial = new THREE.LineBasicMaterial({ color });
+          const frustumLines = new THREE.LineSegments(lineGeometry, lineMaterial);
+          group.add(frustumLines);
+
+          group.position.set(pose.x, pose.y, pose.z);
+          if (pose.qx !== undefined) {
+            group.quaternion.set(pose.qx, pose.qy, pose.qz, pose.qw);
+          }
+          return group;
+        };
+
+        pathData.forEach((p: any, idx: number) => {
+          if (idx !== 0 && idx !== pathData.length - 1 && idx % stride !== 0) return;
+          let color = 0x00ff00;
+          if (idx === 0) color = 0xff0000;
+          else if (idx === pathData.length - 1) color = 0x0000ff;
+          const frustum = createCameraFrustum(p, color, frustumScale);
+          scene.add(frustum);
+        });
+
+        const animate = () => {
+          animationId = requestAnimationFrame(animate);
+          controls.update();
+          renderer.render(scene, camera);
+        };
+        animate();
+
+        resizeHandler = () => {
+          if (!container || !renderer) return;
+          const w = container.clientWidth;
+          const h = container.clientHeight;
+          camera.aspect = w / h;
+          camera.updateProjectionMatrix();
+          renderer.setSize(w, h);
+        };
+        window.addEventListener('resize', resizeHandler);
+
+        setStats({ points: pointsData.length, cameras: pathData.length });
+        setViewerLoading(false);
+      } catch (err: any) {
+        console.error(err);
+        setError(err?.message || '参考场景加载失败');
+        setViewerLoading(false);
+      }
+    };
+
+    setViewerLoading(true);
+    init();
+
+    return () => {
+      console.log('[SequenceSimulator] 清理渲染器');
+      cancelAnimationFrame(animationId);
+      if (controls?.dispose) controls.dispose();
+      if (renderer?.dispose) renderer.dispose();
+      if (renderer?.domElement && renderer.domElement.parentNode) {
+        renderer.domElement.parentNode.removeChild(renderer.domElement);
+      }
+      if (resizeHandler) {
+        window.removeEventListener('resize', resizeHandler);
+      }
+    };
+  }, [sceneData, scannedScene]);
 
   return (
-    <div 
+    <div
       className="fixed inset-0 bg-black/95 z-50 flex flex-col animate-fade-in"
       onClick={onClose}
     >
-      <div 
-        className="flex-1 flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex-none px-4 py-3 bg-black/80 backdrop-blur-sm border-b border-white/[0.08]" style={{ paddingTop: 'max(44px, env(safe-area-inset-top))' }}>
-          <div className="flex items-center justify-between">
+      <div className="flex-none px-4 py-3 bg-black/80 backdrop-blur-sm border-b border-white/[0.08]" style={{ paddingTop: 'max(44px, env(safe-area-inset-top))' }}>
+          <div className="flex items-center justify-between gap-2">
             <button
               onClick={onClose}
               className="w-10 h-10 rounded-full bg-white/10 backdrop-blur-sm flex items-center justify-center active:scale-90 transition-all border border-white/10"
             >
               <ArrowLeft className="w-5 h-5 text-white" strokeWidth={2} />
             </button>
-            <h3 className="body font-bold text-white">Sequence 预览</h3>
-            <button
-              onClick={() => setShowComparison(!showComparison)}
-              className={`caption font-semibold active:scale-95 transition-all px-3 py-1.5 rounded-lg ${
-                showComparison ? 'bg-brand/20 text-brand border border-brand/40' : 'text-white/70'
-              }`}
-            >
-              对比模式
-            </button>
-          </div>
-        </div>
-
-        {/* 3D 预览区 */}
-        <div className="flex-1 relative">
-          {!showComparison ? (
-            /* 单图模式 */
-            <div className="w-full h-full relative">
-              <Scene3DView viewAngle={viewAngle} progress={progress} version="optimized" />
-            </div>
-          ) : (
-            /* 对比模式 */
-            <div className="w-full h-full grid grid-cols-2 gap-px bg-white/[0.08]">
-              <div className="relative">
-                <div className="absolute top-3 left-3 z-10 px-2.5 py-1 bg-white/[0.08] backdrop-blur-sm rounded-lg border border-white/20">
-                  <span className="caption font-bold text-white/70">优化前</span>
-                </div>
-                <Scene3DView viewAngle={viewAngle} progress={progress} version="original" />
-              </div>
-              <div className="relative">
-                <div className="absolute top-3 right-3 z-10 px-2.5 py-1 bg-brand/20 backdrop-blur-sm rounded-lg border border-brand/40">
-                  <span className="caption font-bold text-brand">优化后</span>
-                </div>
-                <Scene3DView viewAngle={viewAngle} progress={progress} version="optimized" />
-              </div>
-            </div>
-          )}
-
-          {/* 视角控制 */}
-          <div className="absolute top-4 right-4 bg-black/60 backdrop-blur-sm rounded-xl border border-white/10 p-2">
-            <div className="flex flex-col gap-2">
-              {[
-                { angle: 'top' as const, label: '俯视', icon: '⬇' },
-                { angle: 'side' as const, label: '侧视', icon: '↗' },
-                { angle: 'follow' as const, label: '跟随', icon: '👁' },
-                { angle: 'free' as const, label: '自由', icon: '🔄' },
-              ].map((view) => (
-                <button
-                  key={view.angle}
-                  onClick={() => setViewAngle(view.angle)}
-                  className={`px-3 py-2 rounded-lg caption font-semibold transition-all active:scale-95 ${
-                    viewAngle === view.angle
-                      ? 'bg-brand text-white'
-                      : 'bg-white/10 text-white/70 hover:bg-white/20'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <span>{view.icon}</span>
-                    <span>{view.label}</span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* 当前单元信息 */}
-          <div className="absolute bottom-24 left-4 right-4 flex items-center justify-center pointer-events-none">
-            <div className="glass-card px-4 py-2.5 max-w-xs">
-              <div className="flex items-center gap-2">
-                <div 
-                  className="w-2 h-2 rounded-full animate-pulse"
-                  style={{ backgroundColor: sequenceUnits[activeUnit].color }}
-                />
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-0.5">
-                    <span className="caption font-bold" style={{ color: sequenceUnits[activeUnit].color }}>
-                      {sequenceUnits[activeUnit].code}
-                    </span>
-                    <span className="caption text-white">{sequenceUnits[activeUnit].name}</span>
-                  </div>
-                  <div className="micro text-white/50">
-                    {sequenceUnits[activeUnit].duration}秒 · 第 {activeUnit + 1}/{sequenceUnits.length} 步
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* 底部控制区 */}
-        <div className="flex-none bg-black/80 backdrop-blur-sm border-t border-white/[0.08] px-4 pb-8 pt-4">
-          {/* 时间轴 */}
-          <div className="mb-4">
-            {/* Sequence 单元标记 */}
-            <div className="flex mb-2 h-6">
-              {sequenceUnits.map((unit, index) => {
-                const width = (unit.duration / totalDuration) * 100;
-                return (
-                  <div
-                    key={index}
-                    className="relative flex items-center justify-center"
-                    style={{ width: `${width}%` }}
-                  >
-                    <div 
-                      className={`h-6 rounded-md border transition-all ${
-                        index === activeUnit 
-                          ? 'border-2 scale-105' 
-                          : 'border opacity-50'
-                      }`}
-                      style={{
-                        width: '100%',
-                        backgroundColor: `${unit.color}20`,
-                        borderColor: unit.color,
-                      }}
-                    >
-                      <div className="flex items-center justify-center h-full">
-                        <span 
-                          className="micro font-bold"
-                          style={{ color: unit.color }}
-                        >
-                          {unit.code}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* 进度条 */}
-            <div className="relative">
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={progress}
-                onChange={(e) => setProgress(parseFloat(e.target.value))}
-                className="w-full h-2 bg-white/10 rounded-full appearance-none cursor-pointer"
-                style={{
-                  background: `linear-gradient(to right, ${sequenceUnits[activeUnit].color} 0%, ${sequenceUnits[activeUnit].color} ${progress}%, rgba(255,255,255,0.1) ${progress}%, rgba(255,255,255,0.1) 100%)`,
-                }}
-              />
-              {/* 播放头 */}
-              <div 
-                className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 border-white shadow-lg pointer-events-none"
-                style={{ 
-                  left: `calc(${progress}% - 8px)`,
-                  backgroundColor: sequenceUnits[activeUnit].color,
-                }}
-              />
-            </div>
-
-            {/* 时间显示 */}
-            <div className="flex justify-between mt-1">
+            <div className="flex flex-col items-start flex-1 min-w-0">
+              <h3 className="body font-bold text-white">模板参考场景</h3>
               <span className="micro text-white/50">
-                {((progress / 100) * totalDuration).toFixed(1)}s
+                自动加载当前视频的重建结果（点云 + 相机轨迹）
               </span>
-              <span className="micro text-white/50">{totalDuration}s</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="px-2.5 py-1 rounded-lg bg-white/10 border border-white/10 caption text-white/80">
+                {currentProjectId ? `项目ID ${currentProjectId}` : '未绑定项目ID'}
+              </div>
+            <div className="px-2.5 py-1 rounded-lg bg-white/10 border border-white/10 caption text-white/80">
+              点云 {stats.points}
+            </div>
+            <div className="px-2.5 py-1 rounded-lg bg-white/10 border border-white/10 caption text-white/80">
+              轨迹 {stats.cameras}
+              </div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const key = templateKey || videoUrl;
+                  clearCachedProjectId(key);
+                  setCurrentProjectId(undefined);
+                  setSceneData(null);
+                  setStats({ points: 0, cameras: 0 });
+                  setReconStatus('重新重建...');
+                  ensureDataReady();
+                }}
+                className="px-3 py-1.5 rounded-lg bg-white/10 border border-white/20 text-white caption font-bold active:scale-95 transition-all"
+              >
+                重新重建
+              </button>
             </div>
           </div>
+        </div>
 
-          {/* 播放控制按钮 */}
-          <div className="flex items-center justify-center gap-3">
-            <button
-              onClick={() => setProgress(0)}
-              className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-sm flex items-center justify-center active:scale-90 transition-all border border-white/20"
-            >
-              <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20">
-                <path d="M8.445 14.832A1 1 0 0010 14v-2.798l5.445 3.63A1 1 0 0017 14V6a1 1 0 00-1.555-.832L10 8.798V6a1 1 0 00-1.555-.832l-6 4a1 1 0 000 1.664l6 4z" />
-              </svg>
-            </button>
+      <div
+        className="flex-1 relative px-4 pb-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="absolute inset-0 px-4 pb-6 pt-3">
+          <div
+            ref={containerRef}
+            className="w-full h-full bg-[#0A0A0A] border border-white/[0.08] rounded-2xl overflow-hidden"
+          />
+        </div>
 
-            <button
-              onClick={togglePlay}
-              className="w-16 h-16 rounded-full bg-brand-gradient flex items-center justify-center active:scale-90 transition-all shadow-lg"
-            >
-              {isPlaying ? (
-                <svg className="w-7 h-7 text-white" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
-                </svg>
-              ) : (
-                <Play className="w-7 h-7 text-white ml-1" strokeWidth={2.5} fill="white" />
-              )}
-            </button>
+        {(viewerLoading || loading) && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="glass-card px-4 py-3">
+              <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              <p className="caption text-white/70 mt-2">
+                {loading ? '拉取点云/轨迹中...' : '加载参考场景中...'}
+              </p>
+              <p className="micro text-white/50 mt-1">{reconStatus}</p>
+            </div>
+          </div>
+        )}
 
+        {error && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="glass-card px-4 py-3 text-center max-w-sm space-y-2">
+              <p className="body text-white mb-1">加载失败</p>
+              <p className="caption text-white/60">{error}</p>
+              <div className="flex items-center justify-center gap-2">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    ensureDataReady();
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-brand text-white caption font-bold active:scale-95 transition-all"
+                >
+                  重试
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSceneData({ points: generateMockPointCloud(1500), cameraPath: generateMockCameraPath() });
+                    setError(null);
+                    setReconStatus('使用示例场景');
+                    setViewerLoading(true);
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-white/10 border border-white/20 text-white caption font-bold active:scale-95 transition-all"
+                >
+                  使用示例
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!error && !loading && !viewerLoading && (!sceneData || !sceneData.points?.length) && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="glass-card px-4 py-4 text-center max-w-sm space-y-2">
+              <p className="body text-white mb-1">等待重建结果</p>
+              <p className="caption text-white/60">
+                {currentProjectId
+                  ? `项目 ${currentProjectId} 正在重建或尚无点云，请稍候…`
+                  : '未找到可用项目，检查模板是否包含 videoUrl 或 projectId'}
+              </p>
+              <div className="flex items-center justify-center gap-2">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    ensureDataReady();
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-brand text-white caption font-bold active:scale-95 transition-all"
+                >
+                  重新加载
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSceneData({ points: generateMockPointCloud(1500), cameraPath: generateMockCameraPath() });
+                    setError(null);
+                    setReconStatus('使用示例场景');
+                    setViewerLoading(true);
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-white/10 border border-white/20 text-white caption font-bold active:scale-95 transition-all"
+                >
+                  查看示例
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="absolute bottom-4 left-4 right-4 flex flex-wrap gap-2 justify-between items-center text-white/70 caption">
+          <div className="glass-card px-3 py-2 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-[#00A8E8]" />
+            <span>蓝色线条为相机轨迹，红/绿分别是起点与终点</span>
+          </div>
+          <div className="glass-card px-3 py-2 flex items-center gap-2">
+            <span className="micro text-white/70">滚轮缩放 · 右键/Shift+拖拽平移 · 左键旋转</span>
+            {reconStatus && <span className="micro text-brand/80">状态: {reconStatus}</span>}
             <button
-              onClick={() => setProgress(100)}
-              className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-sm flex items-center justify-center active:scale-90 transition-all border border-white/20"
+              onClick={(e) => {
+                e.stopPropagation();
+                const key = templateKey || videoUrl;
+                clearCachedProjectId(key);
+                setCurrentProjectId(undefined);
+                setSceneData(null);
+                setStats({ points: 0, cameras: 0 });
+                setReconStatus('重新重建...');
+                forceNewRef.current = true;
+                ensureDataReady();
+              }}
+              className="px-3 py-1.5 rounded-lg bg-white/10 border border-white/20 text-white caption font-bold active:scale-95 transition-all"
             >
-              <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20">
-                <path d="M4.555 5.168A1 1 0 003 6v8a1 1 0 001.555.832L10 11.202V14a1 1 0 001.555.832l6-4a1 1 0 000-1.664l-6-4A1 1 0 0010 6v2.798l-5.445-3.63z" />
-              </svg>
+              重新重建
             </button>
           </div>
         </div>
       </div>
     </div>
   );
+}
+
+function generateMockPointCloud(count = 2000) {
+  const points = [];
+  for (let i = 0; i < count; i++) {
+    const x = (Math.random() - 0.5) * 2;
+    const y = Math.random() * 1.2;
+    const z = (Math.random() - 0.5) * 2;
+    points.push({
+      x,
+      y,
+      z,
+      r: 0.4 + Math.random() * 0.3,
+      g: 0.6 + Math.random() * 0.3,
+      b: 0.8 + Math.random() * 0.2,
+    });
+  }
+  return points;
+}
+
+function generateMockCameraPath() {
+  const path = [];
+  const steps = 20;
+  for (let i = 0; i < steps; i++) {
+    const t = i / (steps - 1);
+    path.push({
+      x: -0.6 + t * 1.2 + Math.sin(t * Math.PI * 2) * 0.1,
+      y: 0.2 + Math.cos(t * Math.PI) * 0.05,
+      z: 0.8 - t * 1.0 + Math.cos(t * Math.PI * 2) * 0.08,
+    });
+  }
+  return path;
 }
 
 // 3D 场景视图组件

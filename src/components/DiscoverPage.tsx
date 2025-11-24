@@ -13,15 +13,15 @@ import reidTravelImage from 'figma:asset/8c202670263e15a12c2606c46b3a2cea7b943ec
 const mockFeedData = [
   {
     id: 1,
-    videoUrl: 'https://example.com/video1.mp4',
-    thumbnail: danceGroupImage,
-    title: '战无不胜',
-    author: '不齐舞团',
+    videoUrl: '/data/飞书20251124-172645.mp4',
+    thumbnail: '/data/飞书20251124-172645.jpg',
+    title: '下午茶',
+    author: '本地视频',
     avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&h=100&fit=crop',
     likes: 8900,
     comments: 342,
-    sequenceName: '不齐舞团·环球街舞运镜',
-    sequenceCode: 'C5',
+    sequenceName: '下午茶',
+    sequenceCode: 'C3',
     tag: '官方',
     duration: '0:28',
     downloads: 3200,
@@ -371,16 +371,45 @@ function GridView({
 // Grid Card - 优化后的两列卡片
 function GridCard({ item, onClick, onUseClick }: { item: any; onClick: () => void; onUseClick: () => void }) {
   const difficulty = difficultyConfig[item.difficulty as keyof typeof difficultyConfig];
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [thumbError, setThumbError] = useState(false);
+
+  useEffect(() => {
+    setThumbError(false);
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.currentTime = 0;
+    }
+  }, [item.videoUrl]);
   
   return (
     <div className="flex flex-col bg-[#1A1A1A] rounded-xl overflow-hidden">
       {/* Thumbnail */}
       <button onClick={onClick} className="relative aspect-[3/4] overflow-hidden">
-        <ImageWithFallback
-          src={item.thumbnail}
-          alt={item.title}
-          className="w-full h-full object-cover"
-        />
+        {item.videoUrl && !thumbError ? (
+          <video
+            ref={videoRef}
+            src={item.videoUrl}
+            className="w-full h-full object-cover"
+            muted
+            playsInline
+            preload="metadata"
+            onLoadedData={() => {
+              const v = videoRef.current;
+              if (v) {
+                v.pause();
+                v.currentTime = 0;
+              }
+            }}
+            onError={() => setThumbError(true)}
+          />
+        ) : (
+          <ImageWithFallback
+            src={item.thumbnail}
+            alt={item.title}
+            className="w-full h-full object-cover"
+          />
+        )}
         
         {/* Overlay */}
         <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-black/70" />
@@ -538,6 +567,18 @@ function ScrollView({
 function FeedCard({ item, onSelect }: { item: any; onSelect: () => void }) {
   const [liked, setLiked] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [videoError, setVideoError] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    setVideoError(false);
+    if (videoRef.current) {
+      const playPromise = videoRef.current.play();
+      if (playPromise?.catch) {
+        playPromise.catch(() => {});
+      }
+    }
+  }, [item.videoUrl]);
 
   return (
     <div 
@@ -546,11 +587,25 @@ function FeedCard({ item, onSelect }: { item: any; onSelect: () => void }) {
     >
       {/* Background */}
       <div className="absolute inset-0">
-        <ImageWithFallback
-          src={item.thumbnail}
-          alt={item.title}
-          className="w-full h-full object-cover"
-        />
+        {item.videoUrl && !videoError ? (
+          <video
+            ref={videoRef}
+            src={item.videoUrl}
+            className="w-full h-full object-cover"
+            muted
+            loop
+            playsInline
+            autoPlay
+            onError={() => setVideoError(true)}
+            poster={item.thumbnail}
+          />
+        ) : (
+          <ImageWithFallback
+            src={item.thumbnail}
+            alt={item.title}
+            className="w-full h-full object-cover"
+          />
+        )}
         <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-black/80" />
       </div>
 

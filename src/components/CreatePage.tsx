@@ -72,6 +72,8 @@ export default function CreatePage({ activeTemplate = null, onSaveShot }: { acti
     return `${mins.toString().padStart(2, '0')}'${secs.toString().padStart(2, '0')}"`;
   };
 
+  const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+
   const saveRecording = async () => {
     try {
       toast.info('正在上传视频和数据到服务器...');
@@ -94,7 +96,7 @@ export default function CreatePage({ activeTemplate = null, onSaveShot }: { acti
       const dataBlob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
       formData.append('data', dataBlob, `data_${timestamp}.json`);
 
-      const response = await fetch('http://localhost:3001/upload', {
+      const response = await fetch(`${apiBase}/upload`, {
         method: 'POST',
         body: formData
       });
