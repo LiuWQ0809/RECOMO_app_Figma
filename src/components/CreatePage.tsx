@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { toast } from 'sonner';
 import { Battery, Wifi, Circle, Camera, Video, X, Zap, Focus, ChevronDown, Mic, MicOff, Sliders, Sun, Droplet, Aperture, Clock, Bookmark, Radio, Music, Users, ShoppingBag, Activity, Box, Maximize2, Film, Scissors, Gamepad2, Move, SlidersHorizontal, Crosshair, Navigation } from 'lucide-react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import ARDanceGuide from './ARDanceGuide';
@@ -71,7 +72,46 @@ export default function CreatePage({ activeTemplate = null, onSaveShot }: { acti
     return `${mins.toString().padStart(2, '0')}'${secs.toString().padStart(2, '0')}"`;
   };
 
-  const handleStartStreaming = () => {
+  const saveRecording = async () => {
+    try {
+      toast.info('正在上传视频和数据到服务器...');
+      const formData = new FormData();
+      
+      // Mock video file
+      const videoBlob = new Blob(['mock video content'], { type: 'video/mp4' });
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      formData.append('video', videoBlob, `recording_${timestamp}.mp4`);
+
+      // Mock data file
+      const data = {
+        timestamp: Date.now(),
+        duration: streamTime,
+        cameraPosition,
+        cameraSettings,
+        controlMode,
+        activeTemplate
+      };
+      const dataBlob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      formData.append('data', dataBlob, `data_${timestamp}.json`);
+
+      const response = await fetch('http://localhost:3001/upload', {
+        method: 'POST',
+        body: formData
+      });
+      
+      const result = await response.json();
+      if (result.success) {
+        toast.success('上传成功！');
+      } else {
+        toast.error('上传失败: ' + result.message);
+      }
+    } catch (error) {
+      console.error('Upload failed', error);
+      toast.error('上传出错，请检查服务器连接');
+    }
+  };
+
+  const handleStartStreaming = async () => {
     if (!isStreaming) {
       setIsStreaming(true);
       // Start sequence execution if in sequence mode
@@ -90,6 +130,7 @@ export default function CreatePage({ activeTemplate = null, onSaveShot }: { acti
       }
     } else {
       setIsStreaming(false);
+      await saveRecording();
       setShowComplete(true);
       setIsExecutingSequence(false);
       setSequenceProgress(0);
