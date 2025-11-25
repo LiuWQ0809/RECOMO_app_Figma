@@ -1443,9 +1443,23 @@ function SequenceSimulator({
         );
         scene.add(cloud);
 
+        // 将TUM位姿直接用作相机中心，翻转Y轴对齐点云坐标系
+        const flipQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
         const pathData =
           data.cameraPath && data.cameraPath.length >= 2
-            ? data.cameraPath.map((p: any) => ({ ...p, y: -p.y }))
+            ? data.cameraPath.map((p: any) => {
+                const q = new THREE.Quaternion(p.qx ?? 0, p.qy ?? 0, p.qz ?? 0, p.qw ?? 1);
+                q.premultiply(flipQuat); // Y翻转
+                return {
+                  x: p.x,
+                  y: -p.y,
+                  z: p.z,
+                  qx: q.x,
+                  qy: q.y,
+                  qz: q.z,
+                  qw: q.w,
+                };
+              })
             : generateMockCameraPath();
         const lineGeometry = new THREE.BufferGeometry().setFromPoints(
           pathData.map((p: any) => new THREE.Vector3(p.x, p.y, p.z))
@@ -1474,8 +1488,11 @@ function SequenceSimulator({
 
         const createCameraFrustum = (pose: any, color = 0x00ff00, size = 0.05) => {
           const group = new THREE.Group();
+          // 相机看向 -Z，使用负Z定义近平面/远平面
           const near = size * 0.3;
           const far = size * 1.5;
+          const zNear = -near;
+          const zFar = -far;
           const aspect = 1.33;
           const fov = 60;
           const halfHeightNear = near * Math.tan(THREE.MathUtils.degToRad(fov / 2));
@@ -1484,14 +1501,14 @@ function SequenceSimulator({
           const halfWidthFar = halfHeightFar * aspect;
 
           const vertices = [
-            new THREE.Vector3(-halfWidthNear, -halfHeightNear, near),
-            new THREE.Vector3(halfWidthNear, -halfHeightNear, near),
-            new THREE.Vector3(halfWidthNear, halfHeightNear, near),
-            new THREE.Vector3(-halfWidthNear, halfHeightNear, near),
-            new THREE.Vector3(-halfWidthFar, -halfHeightFar, far),
-            new THREE.Vector3(halfWidthFar, -halfHeightFar, far),
-            new THREE.Vector3(halfWidthFar, halfHeightFar, far),
-            new THREE.Vector3(-halfWidthFar, halfHeightFar, far),
+            new THREE.Vector3(-halfWidthNear, -halfHeightNear, zNear),
+            new THREE.Vector3(halfWidthNear, -halfHeightNear, zNear),
+            new THREE.Vector3(halfWidthNear, halfHeightNear, zNear),
+            new THREE.Vector3(-halfWidthNear, halfHeightNear, zNear),
+            new THREE.Vector3(-halfWidthFar, -halfHeightFar, zFar),
+            new THREE.Vector3(halfWidthFar, -halfHeightFar, zFar),
+            new THREE.Vector3(halfWidthFar, halfHeightFar, zFar),
+            new THREE.Vector3(-halfWidthFar, halfHeightFar, zFar),
           ];
 
           const lineVertices: number[] = [];
