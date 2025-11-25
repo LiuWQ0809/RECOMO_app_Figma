@@ -1051,8 +1051,10 @@ function SequenceSimulator({
   const [reconStatus, setReconStatus] = useState<string>('等待加载');
   const [currentProjectId, setCurrentProjectId] = useState<string | undefined>(() => {
     const key = templateKey || videoUrl;
-    return projectId || getCachedProjectId(key);
+    const cached = getCachedProjectId(key);
+    return cached || projectId;
   });
+  const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
   const statusTimer = useRef<any>(null);
   const [lastTriedProject, setLastTriedProject] = useState<string | null>(null);
   const forceNewRef = useRef(false);
@@ -1114,31 +1116,74 @@ function SequenceSimulator({
     return poses;
   };
 
+  // 优先使用 PLYLoader (ArrayBuffer) 提升解析速度，失败则回退 ASCII
+  const loadPlyGeometry = async (url: string) => {
+    try {
+      const THREE = await import('three');
+      const { PLYLoader } = await import('three/examples/jsm/loaders/PLYLoader.js');
+      const loader = new PLYLoader();
+      const arrayBuffer = await (await fetch(url, { cache: 'no-cache' })).arrayBuffer();
+
+      return await new Promise<any[]>((resolve, reject) => {
+        try {
+          const geometry = loader.parse(arrayBuffer);
+          const positions = geometry.getAttribute('position');
+          const colorsAttr = geometry.getAttribute('color');
+          const pts: any[] = [];
+          for (let i = 0; i < positions.count; i++) {
+            pts.push({
+              x: positions.getX(i),
+              y: positions.getY(i),
+              z: positions.getZ(i),
+              r: colorsAttr ? colorsAttr.getX(i) : 0.7,
+              g: colorsAttr ? colorsAttr.getY(i) : 0.8,
+              b: colorsAttr ? colorsAttr.getZ(i) : 1.0,
+            });
+          }
+          resolve(pts);
+        } catch (e) {
+          reject(e);
+        }
+      });
+    } catch (e) {
+      console.warn('PLYLoader 解析失败，回退 ASCII', e);
+      const txt = await (await fetch(url, { cache: 'no-cache' })).text();
+      return parseAsciiPly(txt);
+    }
+  };
+
   const loadProjectData = async (pid?: string) => {
-    const effectiveId = pid || currentProjectId || projectId;
+    const key = templateKey || videoUrl;
+    const cached = getCachedProjectId(key);
+    const effectiveId = pid || cached || currentProjectId || projectId;
     if (!effectiveId) {
       setError('未提供项目ID，无法加载点云/轨迹');
+      return;
+    }
+    if (loadedProjectId === effectiveId && sceneData?.points?.length) {
+      setViewerLoading(false);
       return;
     }
     setLoading(true);
     setError(null);
     try {
       console.log('[SequenceSimulator] 请求点云/轨迹, projectId:', effectiveId);
-      const pcResp = await fetch(`${API_BASE}/projects/${effectiveId}/pointcloud`);
+      // 优先请求预览点云，加快加载
+      const pointUrl = `${API_BASE}/projects/${effectiveId}/pointcloud?preview=true`;
+      console.log('[SequenceSimulator] 点云URL:', pointUrl);
+      const pcResp = await fetch(pointUrl);
       const pcJson = await pcResp.json();
       if (!pcJson.pointcloud_url) {
-        throw new Error('未找到点云文件 (sparse_ascii.ply 或 sparse.ply)');
+        throw new Error('未找到点云文件 (sparse_preview/ascii/ply)');
       }
-      console.log('[SequenceSimulator] 点云URL:', pcJson.pointcloud_url);
+      console.log('[SequenceSimulator] 预览点云文件:', pcJson.pointcloud_url);
       const posesResp = await fetch(`${API_BASE}/projects/${effectiveId}/poses`);
       const posesJson = await posesResp.json();
       console.log('[SequenceSimulator] 轨迹URL:', posesJson.poses_url);
 
       const plyUrl = resolveUrl(pcJson.pointcloud_url);
-      const plyText = await (await fetch(plyUrl, { cache: 'no-cache' })).text();
-      console.log('[SequenceSimulator] 点云文本长度:', plyText.length);
-      const points = parseAsciiPly(plyText);
-      if (!points.length) throw new Error('点云解析为空，请确认PLY为ASCII格式');
+      const points = await loadPlyGeometry(plyUrl);
+      if (!points.length) throw new Error('点云解析为空');
 
       let cameraPath: any[] = [];
       if (posesJson.poses_url) {
@@ -1150,6 +1195,7 @@ function SequenceSimulator({
 
       setSceneData({ points, cameraPath });
       setStats({ points: points.length, cameras: cameraPath.length });
+      setLoadedProjectId(effectiveId);
     setViewerLoading(true); // 让下方渲染流程重新显示loading遮罩
   } catch (err: any) {
     console.error(err);
@@ -1219,7 +1265,8 @@ function SequenceSimulator({
       setViewerLoading(false);
       return;
     }
-    let pid = projectId || currentProjectId || getCachedProjectId(templateKey || videoUrl);
+    const cached = getCachedProjectId(templateKey || videoUrl);
+    let pid = cached || currentProjectId || projectId;
     if (!pid && videoUrl) {
       try {
         pid = await uploadVideoAndCreate();
@@ -1234,8 +1281,7 @@ function SequenceSimulator({
     }
     // 写入缓存，避免后续重复重建
     setCachedProjectId(templateKey || videoUrl, pid);
-      setCurrentProjectId(pid);
-      setCachedProjectId(templateKey || videoUrl, pid);
+    setCurrentProjectId(pid);
     setError(null);
     setReconStatus('检查重建状态...');
     try {
@@ -1248,6 +1294,7 @@ function SequenceSimulator({
         clearCachedProjectId(templateKey || videoUrl);
         forceNewRef.current = true;
         setCurrentProjectId(undefined);
+        setLoadedProjectId(null);
         if (retrying) {
           setError('项目缺失且重建重试失败');
           setViewerLoading(false);
@@ -1281,6 +1328,7 @@ function SequenceSimulator({
             clearCachedProjectId(templateKey || videoUrl);
             forceNewRef.current = true;
             setCurrentProjectId(undefined);
+            setLoadedProjectId(null);
             await ensureDataReady(true);
             return;
           }

@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 API_HOST="${API_HOST:-192.168.100.100}"
 API_PORT="${API_PORT:-3001}"
-VITE_PORT="${VITE_PORT:-3000}"
+VITE_PORT="${VITE_PORT:-3002}"
 DATA_DIR="${DATA_DIR:-/home/converge/data/RECOMO_App_Data}"
 
 echo "==> Preparing directories"

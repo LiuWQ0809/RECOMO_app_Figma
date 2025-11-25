@@ -14,7 +14,8 @@ const mockFeedData = [
   {
     id: 1,
     videoUrl: '/data/飞书20251124-172645.mp4',
-    thumbnail: '/data/飞书20251124-172645.jpg',
+    thumbnail: '/data/20251124-185456.jpg',
+    forceThumbnail: true,
     title: '下午茶',
     author: '本地视频',
     avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&h=100&fit=crop',
@@ -386,7 +387,7 @@ function GridCard({ item, onClick, onUseClick }: { item: any; onClick: () => voi
     <div className="flex flex-col bg-[#1A1A1A] rounded-xl overflow-hidden">
       {/* Thumbnail */}
       <button onClick={onClick} className="relative aspect-[3/4] overflow-hidden">
-        {item.videoUrl && !thumbError ? (
+        {item.videoUrl && !thumbError && !item.forceThumbnail ? (
           <video
             ref={videoRef}
             src={item.videoUrl}
