@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Play, Camera, Zap, Music, MapPin, CheckCircle2, ChevronRight, Sparkles, Clock, Ruler, Wind, Video, Image as ImageIcon, UserPlus, Settings, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface TemplatePageProps {
@@ -1055,9 +1055,32 @@ function SequenceSimulator({
     return cached || projectId;
   });
   const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
+  const [videoWidthPct, setVideoWidthPct] = useState<number>(20); // 视频宽占比%
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [pathDuration, setPathDuration] = useState(0);
   const statusTimer = useRef<any>(null);
   const [lastTriedProject, setLastTriedProject] = useState<string | null>(null);
   const forceNewRef = useRef(false);
+  const videoPlayerRef = useRef<HTMLVideoElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const timelineRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
+  const rafRef = useRef<number | null>(null);
+  const currentTimeRef = useRef(0);
+  // 已弃用视锥
+  const durationRef = useRef(0);
+  const duration = useMemo(() => {
+    const d = Math.max(videoDuration || 0, pathDuration || 0);
+    if (d > 0) durationRef.current = d;
+    return d || durationRef.current;
+  }, [videoDuration, pathDuration]);
+
+  const formatTime = (t: number) => {
+    if (!isFinite(t) || t < 0) t = 0;
+    const m = Math.floor(t / 60);
+    const s = Math.floor(t % 60);
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
 
   const API_BASE = import.meta.env.VITE_SFM_API_BASE || 'http://192.168.100.100:7000/api';
   const STATIC_BASE = API_BASE.replace(/\/api$/, '');
@@ -1103,6 +1126,7 @@ function SequenceSimulator({
       const parts = line.trim().split(/\s+/);
       if (parts.length >= 8) {
         poses.push({
+          ts: parseFloat(parts[0]),
           x: parseFloat(parts[1]),
           y: parseFloat(parts[2]),
           z: parseFloat(parts[3]),
@@ -1359,13 +1383,14 @@ function SequenceSimulator({
     if ((projectId || templateKey || videoUrl) && !scannedScene) {
       ensureDataReady();
     }
+    currentTimeRef.current = currentTime;
     return () => {
       if (statusTimer.current) {
         clearInterval(statusTimer.current);
         statusTimer.current = null;
       }
     };
-  }, [projectId, scannedScene, templateKey, videoUrl]);
+  }, [projectId, scannedScene, templateKey, videoUrl, currentTime]);
 
   useEffect(() => {
     let renderer: any = null;
@@ -1451,6 +1476,7 @@ function SequenceSimulator({
                 const q = new THREE.Quaternion(p.qx ?? 0, p.qy ?? 0, p.qz ?? 0, p.qw ?? 1);
                 q.premultiply(flipQuat); // Y翻转
                 return {
+                  ts: p.ts ?? 0,
                   x: p.x,
                   y: -p.y,
                   z: p.z,
@@ -1470,83 +1496,74 @@ function SequenceSimulator({
         );
         scene.add(line);
 
-        // 轨迹使用视锥体替代球体，参考 service_for_sfm
-        const cameraRange = (() => {
-          const xs = pathData.map((p: any) => p.x);
-          const ys = pathData.map((p: any) => p.y);
-          const zs = pathData.map((p: any) => p.z);
-          return {
-            x: Math.max(...xs) - Math.min(...xs),
-            y: Math.max(...ys) - Math.min(...ys),
-            z: Math.max(...zs) - Math.min(...zs),
-          };
-        })();
-        const cameraSpan = (cameraRange.x + cameraRange.y + cameraRange.z) / 3;
-        const frustumScale = Math.max(cameraSpan * 0.05, 0.01);
-        const maxFrustums = 120;
-        const stride = Math.max(1, Math.floor(pathData.length / maxFrustums));
+        // 时间轴参数
+        const tsList = pathData.filter((p: any) => typeof p.ts === 'number');
+        if (tsList.length >= 2) {
+          const startTs = Math.min(...tsList.map((p: any) => p.ts));
+          const endTs = Math.max(...tsList.map((p: any) => p.ts));
+          timelineRef.current = { start: startTs, end: endTs };
+          setPathDuration(endTs - startTs);
+          setCurrentTime(0);
+        } else {
+          timelineRef.current = { start: 0, end: 0 };
+          setPathDuration(0);
+        }
 
-        const createCameraFrustum = (pose: any, color = 0x00ff00, size = 0.05) => {
-          const group = new THREE.Group();
-          // 相机看向 -Z，使用负Z定义近平面/远平面
-          const near = size * 0.3;
-          const far = size * 1.5;
-          const zNear = -near;
-          const zFar = -far;
-          const aspect = 1.33;
-          const fov = 60;
-          const halfHeightNear = near * Math.tan(THREE.MathUtils.degToRad(fov / 2));
-          const halfWidthNear = halfHeightNear * aspect;
-          const halfHeightFar = far * Math.tan(THREE.MathUtils.degToRad(fov / 2));
-          const halfWidthFar = halfHeightFar * aspect;
+        // 绿色线条逐步显示经过的轨迹
+        const traversedGeometry = new THREE.BufferGeometry().setFromPoints(
+          pathData.map((p: any) => new THREE.Vector3(p.x, p.y, p.z))
+        );
+        const traversedMaterial = new THREE.LineBasicMaterial({ color: 0x00ff00, linewidth: 2, opacity: 0.9, transparent: true });
+        traversedGeometry.setDrawRange(0, 0);
+        const traversedLine = new THREE.Line(traversedGeometry, traversedMaterial);
+        scene.add(traversedLine);
 
-          const vertices = [
-            new THREE.Vector3(-halfWidthNear, -halfHeightNear, zNear),
-            new THREE.Vector3(halfWidthNear, -halfHeightNear, zNear),
-            new THREE.Vector3(halfWidthNear, halfHeightNear, zNear),
-            new THREE.Vector3(-halfWidthNear, halfHeightNear, zNear),
-            new THREE.Vector3(-halfWidthFar, -halfHeightFar, zFar),
-            new THREE.Vector3(halfWidthFar, -halfHeightFar, zFar),
-            new THREE.Vector3(halfWidthFar, halfHeightFar, zFar),
-            new THREE.Vector3(-halfWidthFar, halfHeightFar, zFar),
-          ];
+        // 当前相机位置高亮
+        const currentMarker = new THREE.Mesh(
+          new THREE.SphereGeometry(0.02),
+          new THREE.MeshBasicMaterial({ color: 0xffffff })
+        );
+        scene.add(currentMarker);
 
-          const lineVertices: number[] = [];
-          for (let i = 0; i < 4; i++) {
-            lineVertices.push(...vertices[i].toArray(), ...vertices[(i + 1) % 4].toArray());
+        const updateMarker = (timeSec: number) => {
+          if (!pathData.length) return;
+          const { start, end } = timelineRef.current;
+          if (end <= start) return;
+          const pathSpan = end - start;
+          const scale = duration > 0 && pathSpan > 0 ? pathSpan / duration : 1;
+          const targetTs = start + timeSec * scale;
+          let prev = pathData[0];
+          let next = pathData[pathData.length - 1];
+          for (let i = 0; i < pathData.length - 1; i++) {
+            if (pathData[i].ts <= targetTs && pathData[i + 1].ts >= targetTs) {
+              prev = pathData[i];
+              next = pathData[i + 1];
+              break;
+            }
           }
-          for (let i = 4; i < 8; i++) {
-            lineVertices.push(...vertices[i].toArray(), ...vertices[4 + (i + 1) % 4].toArray());
-          }
-          for (let i = 0; i < 4; i++) {
-            lineVertices.push(...vertices[i].toArray(), ...vertices[i + 4].toArray());
-          }
+          const t =
+            next.ts === prev.ts
+              ? 0
+              : Math.min(1, Math.max(0, (targetTs - prev.ts) / (next.ts - prev.ts)));
+          const interp = new THREE.Vector3(
+            prev.x + (next.x - prev.x) * t,
+            prev.y + (next.y - prev.y) * t,
+            prev.z + (next.z - prev.z) * t
+          );
+          currentMarker.position.copy(interp);
 
-          const lineGeometry = new THREE.BufferGeometry();
-          lineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(lineVertices, 3));
-          const lineMaterial = new THREE.LineBasicMaterial({ color });
-          const frustumLines = new THREE.LineSegments(lineGeometry, lineMaterial);
-          group.add(frustumLines);
-
-          group.position.set(pose.x, pose.y, pose.z);
-          if (pose.qx !== undefined) {
-            group.quaternion.set(pose.qx, pose.qy, pose.qz, pose.qw);
+          // 逐步显示经过的轨迹
+          if (traversedGeometry) {
+            const idx = pathData.findIndex((p: any) => p.ts >= targetTs);
+            const drawCount = idx === -1 ? pathData.length : Math.max(2, idx + 1);
+            traversedGeometry.setDrawRange(0, drawCount);
           }
-          return group;
         };
-
-        pathData.forEach((p: any, idx: number) => {
-          if (idx !== 0 && idx !== pathData.length - 1 && idx % stride !== 0) return;
-          let color = 0x00ff00;
-          if (idx === 0) color = 0xff0000;
-          else if (idx === pathData.length - 1) color = 0x0000ff;
-          const frustum = createCameraFrustum(p, color, frustumScale);
-          scene.add(frustum);
-        });
 
         const animate = () => {
           animationId = requestAnimationFrame(animate);
           controls.update();
+          updateMarker(currentTimeRef.current);
           renderer.render(scene, camera);
         };
         animate();
@@ -1586,6 +1603,28 @@ function SequenceSimulator({
       }
     };
   }, [sceneData, scannedScene]);
+
+  // 播放控制，按 TUM 时间轴推进（以视频时间为准，减少状态抖动）
+  useEffect(() => {
+    if (!playing || duration <= 0) return;
+    const tick = () => {
+      const videoTime = videoPlayerRef.current?.currentTime ?? currentTimeRef.current;
+      const clamped = Math.min(duration, videoTime);
+      if (Math.abs(clamped - currentTimeRef.current) > 0.016) {
+        currentTimeRef.current = clamped;
+        setCurrentTime(clamped);
+        if (clamped >= duration) {
+          setPlaying(false);
+        }
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    };
+  }, [playing, duration]);
 
   return (
     <div
@@ -1644,6 +1683,50 @@ function SequenceSimulator({
             ref={containerRef}
             className="w-full h-full bg-[#0A0A0A] border border-white/[0.08] rounded-2xl overflow-hidden"
           />
+          {videoUrl && (
+            <div
+              className="absolute top-4 right-4 bg-black/70 border border-white/10 rounded-xl overflow-hidden resize"
+              style={{
+                width: `${videoWidthPct}%`,
+                maxWidth: '35%',
+                minWidth: '12%',
+                aspectRatio: '9 / 16',
+                minHeight: '180px',
+                maxHeight: '70%',
+              }}
+            >
+              <video
+                ref={videoPlayerRef}
+                src={videoUrl}
+                className="w-full h-full object-contain bg-black"
+                muted
+                playsInline
+                controls
+                onLoadedMetadata={(e) => {
+                  const v = e.currentTarget;
+                  setVideoDuration(v.duration);
+                }}
+                onEnded={() => {
+                  if (videoPlayerRef.current) {
+                    try {
+                      videoPlayerRef.current.pause();
+                      videoPlayerRef.current.currentTime = duration;
+                    } catch {}
+                  }
+                  setCurrentTime(duration);
+                  currentTimeRef.current = duration;
+                  setPlaying(false);
+                }}
+                onPlay={() => setPlaying(true)}
+                onPause={() => setPlaying(false)}
+                onTimeUpdate={() => {}}
+              />
+              <div className="absolute inset-x-0 bottom-0 px-3 py-1.5 bg-black/60 flex items-center justify-between text-white/70 micro">
+                <span>参考视频</span>
+                <span>{duration ? `${duration.toFixed(1)}s` : ''}</span>
+              </div>
+            </div>
+          )}
         </div>
 
         {(viewerLoading || loading) && (
@@ -1727,13 +1810,60 @@ function SequenceSimulator({
         )}
 
         <div className="absolute bottom-4 left-4 right-4 flex flex-wrap gap-2 justify-between items-center text-white/70 caption">
+            <div className="glass-card px-3 py-2 flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-[#00A8E8]" />
+              <span>蓝色线条为相机轨迹，红/绿分别是起点与终点</span>
+            </div>
           <div className="glass-card px-3 py-2 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-[#00A8E8]" />
-            <span>蓝色线条为相机轨迹，红/绿分别是起点与终点</span>
-          </div>
-          <div className="glass-card px-3 py-2 flex items-center gap-2">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                if (videoPlayerRef.current) {
+                  if (videoPlayerRef.current.paused) {
+                    videoPlayerRef.current.play().catch(() => {});
+                  } else {
+                    videoPlayerRef.current.pause();
+                  }
+                }
+              }}
+              className="px-2 py-1 rounded bg-white/10 border border-white/20 text-white"
+            >
+              {playing ? '暂停' : '播放'}
+            </button>
+            <input
+              type="range"
+              min={0}
+              max={duration || 0}
+              step={0.01}
+              value={currentTime}
+              onChange={(e) => {
+                const t = parseFloat(e.target.value);
+                setCurrentTime(t);
+                currentTimeRef.current = t;
+                if (videoPlayerRef.current) {
+                  try {
+                    videoPlayerRef.current.currentTime = t;
+                  } catch {}
+                }
+              }}
+              className="w-40 accent-brand"
+            />
+            <span className="micro text-white/70 font-mono tabular-nums min-w-[90px] text-right">
+              {duration ? `${formatTime(currentTime)} / ${formatTime(duration)}` : '无时间轴'}
+            </span>
+            <div className="flex items-center gap-1">
+              <span className="micro text-white/50">视频大小</span>
+              <input
+                type="range"
+                min={10}
+                max={35}
+                step={1}
+                value={videoWidthPct}
+                onChange={(e) => setVideoWidthPct(parseInt(e.target.value, 10))}
+              />
+              <span className="micro text-white/60">{videoWidthPct}%</span>
+            </div>
             <span className="micro text-white/70">滚轮缩放 · 右键/Shift+拖拽平移 · 左键旋转</span>
-            {reconStatus && <span className="micro text-brand/80">状态: {reconStatus}</span>}
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -1742,6 +1872,7 @@ function SequenceSimulator({
                 setCurrentProjectId(undefined);
                 setSceneData(null);
                 setStats({ points: 0, cameras: 0 });
+                setLoadedProjectId(null);
                 setReconStatus('重新重建...');
                 forceNewRef.current = true;
                 ensureDataReady();
