@@ -8,7 +8,7 @@ import VideoEditor from './VideoEditor';
 type ControlMode = 'sequence' | 'manual' | 'tracking' | 'live';
 type RecordingMode = 'photo' | 'video';
 
-export default function CreatePage({ activeTemplate = null, onSaveShot }: { activeTemplate?: any; onSaveShot?: (shot: any) => void }) {
+export default function CreatePage({ activeTemplate = null, onSaveShot, isPreview = false }: { activeTemplate?: any; onSaveShot?: (shot: any) => void; isPreview?: boolean }) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [controlMode, setControlMode] = useState<ControlMode>(activeTemplate ? 'sequence' : 'manual');
   const [recordingMode, setRecordingMode] = useState<RecordingMode>('video');
@@ -22,6 +22,7 @@ export default function CreatePage({ activeTemplate = null, onSaveShot }: { acti
   const [show3DView, setShow3DView] = useState(true);
   const [showARGuide, setShowARGuide] = useState(false);
   const [showVideoEditor, setShowVideoEditor] = useState(false);
+  const [showPreviewMode, setShowPreviewMode] = useState(isPreview);
   
   // 3D Camera Position State
   const [cameraPosition, setCameraPosition] = useState({ x: 0, y: 1.5, z: 3 });

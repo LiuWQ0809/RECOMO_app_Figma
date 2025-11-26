@@ -5,6 +5,7 @@ interface TemplatePageProps {
   template: any;
   onBack: () => void;
   onStartShooting: (template: any) => void;
+  onPreview?: (template: any) => void;
 }
 
 // Sequence 组成单元类型定义
@@ -28,11 +29,13 @@ interface SequenceUnit {
   manualEdited?: boolean;
 }
 
-export default function TemplatePreparePage({ template, onBack, onStartShooting }: TemplatePageProps) {
+export default function TemplatePreparePage({ template, onBack, onStartShooting, onPreview }: TemplatePageProps) {
   const [sceneScanned, setSceneScanned] = useState(false);
   const [selectedMusic, setSelectedMusic] = useState<string | null>(null);
   const [adaptationComplete, setAdaptationComplete] = useState(false);
   const [expandedUnit, setExpandedUnit] = useState<string | null>(null);
+  const [showTemplateScene, setShowTemplateScene] = useState(false);
+  const [showPreviewSimulator, setShowPreviewSimulator] = useState(false);
 
   // 模拟 Sequence 数据 - 实际应该从 template 中获取
   const [sequenceUnits, setSequenceUnits] = useState<SequenceUnit[]>([
@@ -205,6 +208,15 @@ export default function TemplatePreparePage({ template, onBack, onStartShooting 
                   <div className="caption font-bold text-white truncate">{template.author}</div>
                 </div>
               </div>
+
+              {/* 查看模版参考场景按钮 */}
+              <button 
+                onClick={() => setShowTemplateScene(true)}
+                className="w-full mt-3 py-3 bg-transparent border-2 border-[#00A8E8] rounded-xl caption font-semibold text-brand active:scale-95 transition-all flex items-center justify-center gap-2"
+              >
+                <MapPin className="w-4 h-4" strokeWidth={2.5} />
+                <span>查看模版参考场景</span>
+              </button>
             </div>
           </div>
 
@@ -344,18 +356,27 @@ export default function TemplatePreparePage({ template, onBack, onStartShooting 
                 </div>
               </div>
               
-              <button 
-                onClick={() => onStartShooting(template)}
-                disabled={!(sceneScanned && adaptationComplete && selectedMusic)}
-                className={`w-full py-4 rounded-xl flex items-center justify-center gap-2 shadow-lg transition-all ${
-                  sceneScanned && adaptationComplete && selectedMusic
-                    ? 'bg-brand-gradient shadow-brand/20 active:scale-98'
-                    : 'bg-white/[0.08] cursor-not-allowed opacity-50'
-                }`}
-              >
-                <Camera className="w-5 h-5 text-white" strokeWidth={2.5} />
-                <span className="body font-bold text-white">开始自动运镜拍摄</span>
-              </button>
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => onStartShooting(template)}
+                  disabled={!(sceneScanned && adaptationComplete && selectedMusic)}
+                  className={`flex-1 py-4 rounded-xl flex items-center justify-center gap-2 shadow-lg transition-all ${
+                    sceneScanned && adaptationComplete && selectedMusic
+                      ? 'bg-brand-gradient shadow-brand/20 active:scale-98'
+                      : 'bg-white/[0.08] cursor-not-allowed opacity-50'
+                  }`}
+                >
+                  <Camera className="w-5 h-5 text-white" strokeWidth={2.5} />
+                  <span className="body font-bold text-white">开始拍摄</span>
+                </button>
+                <button 
+                  onClick={() => setShowPreviewSimulator(true)}
+                  className="flex-1 py-4 rounded-xl flex items-center justify-center gap-2 border border-white/20 bg-white/[0.08] active:scale-98 transition-all"
+                >
+                  <Play className="w-5 h-5 text-white" strokeWidth={2.5} />
+                  <span className="body font-bold text-white">Preview</span>
+                </button>
+              </div>
 
               <div className="grid grid-cols-3 gap-2 mt-3">
                 <div className="bg-black/20 backdrop-blur-sm rounded-lg p-2 text-center">
@@ -393,6 +414,23 @@ export default function TemplatePreparePage({ template, onBack, onStartShooting 
             <span>下一步</span>
           </button>
         </div>
+      )}
+
+      {/* 模板参考场景模拟器 */}
+      {showTemplateScene && (
+        <SequenceSimulator 
+          onClose={() => setShowTemplateScene(false)}
+          scannedScene={null}
+          projectId={template?.projectId}
+          videoUrl={template?.videoUrl}
+        />
+      )}
+
+      {/* Preview - Sequence 预览页面 */}
+      {showPreviewSimulator && (
+        <SequencePreview 
+          onClose={() => setShowPreviewSimulator(false)}
+        />
       )}
     </div>
   );
@@ -841,22 +879,13 @@ function SceneScanCard({
         </div>
 
         {!scanning && (
-          <div className="space-y-2">
-            <button 
-              onClick={() => setShowSimulator(true)}
-              className="w-full py-3 bg-white/[0.08] border border-white/[0.12] rounded-xl caption font-semibold text-white active:scale-95 transition-all flex items-center justify-center gap-2"
-            >
-              <Play className="w-4 h-4" strokeWidth={2.5} />
-              <span>查看模板参考场景</span>
-            </button>
-            <button 
-              onClick={() => setShowScanOptions(true)}
-              className="w-full btn-primary-sm flex items-center justify-center gap-2"
-            >
-              <Camera className="w-4 h-4" strokeWidth={2.5} />
-              <span>扫描实际场景</span>
-            </button>
-          </div>
+          <button 
+            onClick={() => setShowScanOptions(true)}
+            className="w-full btn-primary-sm flex items-center justify-center gap-2"
+          >
+            <Camera className="w-4 h-4" strokeWidth={2.5} />
+            <span>扫描实际场景</span>
+          </button>
         )}
 
         {scanning && (
@@ -2070,6 +2099,271 @@ function Scene3DView({
           <span className="caption text-brand font-semibold">AI优化，避开障碍物</span>
         </div>
       )}
+    </div>
+  );
+}
+
+// Sequence 预览页面组件
+function SequencePreview({ onClose }: { onClose: () => void }) {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [viewAngle, setViewAngle] = useState<'top' | 'side' | 'follow' | 'free'>('top');
+  const [showComparison, setShowComparison] = useState(false);
+
+  // 模拟 sequence 单元
+  const sequenceUnits = [
+    { code: 'C2', name: '急速倒退', duration: 8, color: '#00A8E8' },
+    { code: 'S1', name: '静态特写', duration: 3, color: '#FFB800' },
+    { code: 'C1', name: '上升展开', duration: 6, color: '#00A8E8' },
+    { code: 'F1', name: '跟随拍摄', duration: 10, color: '#00DC82' },
+  ];
+
+  const totalDuration = sequenceUnits.reduce((sum, unit) => sum + unit.duration, 0);
+
+  // 播放控制
+  const togglePlay = () => {
+    setIsPlaying(!isPlaying);
+    if (!isPlaying) {
+      const interval = setInterval(() => {
+        setProgress(prev => {
+          if (prev >= 100) {
+            clearInterval(interval);
+            setIsPlaying(false);
+            return 100;
+          }
+          return prev + (100 / totalDuration) * 0.1;
+        });
+      }, 100);
+    }
+  };
+
+  // 根据进度计算当前单元
+  const getCurrentUnit = () => {
+    let accumulated = 0;
+    for (let i = 0; i < sequenceUnits.length; i++) {
+      accumulated += (sequenceUnits[i].duration / totalDuration) * 100;
+      if (progress <= accumulated) {
+        return i;
+      }
+    }
+    return sequenceUnits.length - 1;
+  };
+
+  const activeUnit = getCurrentUnit();
+
+  return (
+    <div 
+      className="fixed inset-0 bg-black/95 z-50 flex flex-col animate-fade-in"
+      onClick={onClose}
+    >
+      <div 
+        className="flex-1 flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex-none px-4 py-3 bg-black/80 backdrop-blur-sm border-b border-white/[0.08]" style={{ paddingTop: 'max(44px, env(safe-area-inset-top))' }}>
+          <div className="flex items-center justify-between">
+            <button
+              onClick={onClose}
+              className="w-10 h-10 rounded-full bg-white/10 backdrop-blur-sm flex items-center justify-center active:scale-90 transition-all border border-white/10"
+            >
+              <ArrowLeft className="w-5 h-5 text-white" strokeWidth={2} />
+            </button>
+            <h3 className="body font-bold text-white">Sequence 预览</h3>
+            <button
+              onClick={() => setShowComparison(!showComparison)}
+              className={`caption font-semibold active:scale-95 transition-all px-3 py-1.5 rounded-lg ${
+                showComparison ? 'bg-brand/20 text-brand border border-brand/40' : 'text-white/70'
+              }`}
+            >
+              对比模式
+            </button>
+          </div>
+        </div>
+
+        {/* 3D 预览区 */}
+        <div className="flex-1 relative">
+          {!showComparison ? (
+            /* 单图模式 */
+            <div className="w-full h-full relative">
+              <Scene3DView viewAngle={viewAngle} progress={progress} version="optimized" />
+            </div>
+          ) : (
+            /* 对比模式 */
+            <div className="w-full h-full grid grid-cols-2 gap-px bg-white/[0.08]">
+              <div className="relative">
+                <div className="absolute top-3 left-3 z-10 px-2.5 py-1 bg-white/[0.08] backdrop-blur-sm rounded-lg border border-white/20">
+                  <span className="caption font-bold text-white/70">优化前</span>
+                </div>
+                <Scene3DView viewAngle={viewAngle} progress={progress} version="original" />
+              </div>
+              <div className="relative">
+                <div className="absolute top-3 right-3 z-10 px-2.5 py-1 bg-brand/20 backdrop-blur-sm rounded-lg border border-brand/40">
+                  <span className="caption font-bold text-brand">优化后</span>
+                </div>
+                <Scene3DView viewAngle={viewAngle} progress={progress} version="optimized" />
+              </div>
+            </div>
+          )}
+
+          {/* 视角控制 */}
+          <div className="absolute top-4 right-4 bg-black/60 backdrop-blur-sm rounded-xl border border-white/10 p-2">
+            <div className="flex flex-col gap-2">
+              {[
+                { angle: 'top' as const, label: '俯视', icon: '⬇' },
+                { angle: 'side' as const, label: '侧视', icon: '↗' },
+                { angle: 'follow' as const, label: '跟随', icon: '👁' },
+                { angle: 'free' as const, label: '自由', icon: '🔄' },
+              ].map((view) => (
+                <button
+                  key={view.angle}
+                  onClick={() => setViewAngle(view.angle)}
+                  className={`px-3 py-2 rounded-lg caption font-semibold transition-all active:scale-95 ${
+                    viewAngle === view.angle
+                      ? 'bg-brand text-white'
+                      : 'bg-white/10 text-white/70 hover:bg-white/20'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span>{view.icon}</span>
+                    <span>{view.label}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 当前单元信息 */}
+          <div className="absolute bottom-24 left-4 right-4 flex items-center justify-center pointer-events-none">
+            <div className="glass-card px-4 py-2.5 max-w-xs">
+              <div className="flex items-center gap-2">
+                <div 
+                  className="w-2 h-2 rounded-full animate-pulse"
+                  style={{ backgroundColor: sequenceUnits[activeUnit].color }}
+                />
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="caption font-bold" style={{ color: sequenceUnits[activeUnit].color }}>
+                      {sequenceUnits[activeUnit].code}
+                    </span>
+                    <span className="caption text-white">{sequenceUnits[activeUnit].name}</span>
+                  </div>
+                  <div className="micro text-white/50">
+                    {sequenceUnits[activeUnit].duration}秒 · 第 {activeUnit + 1}/{sequenceUnits.length} 步
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 底部控制区 */}
+        <div className="flex-none bg-black/80 backdrop-blur-sm border-t border-white/[0.08] px-4 pb-8 pt-4">
+          {/* 时间轴 */}
+          <div className="mb-4">
+            {/* Sequence 单元标记 */}
+            <div className="flex mb-2 h-6">
+              {sequenceUnits.map((unit, index) => {
+                const width = (unit.duration / totalDuration) * 100;
+                return (
+                  <div
+                    key={index}
+                    className="relative flex items-center justify-center"
+                    style={{ width: `${width}%` }}
+                  >
+                    <div 
+                      className={`h-6 rounded-md border transition-all ${
+                        index === activeUnit 
+                          ? 'border-2 scale-105' 
+                          : 'border opacity-50'
+                      }`}
+                      style={{
+                        width: '100%',
+                        backgroundColor: `${unit.color}20`,
+                        borderColor: unit.color,
+                      }}
+                    >
+                      <div className="flex items-center justify-center h-full">
+                        <span 
+                          className="micro font-bold"
+                          style={{ color: unit.color }}
+                        >
+                          {unit.code}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* 进度条 */}
+            <div className="relative">
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={progress}
+                onChange={(e) => setProgress(parseFloat(e.target.value))}
+                className="w-full h-2 bg-white/10 rounded-full appearance-none cursor-pointer"
+                style={{
+                  background: `linear-gradient(to right, ${sequenceUnits[activeUnit].color} 0%, ${sequenceUnits[activeUnit].color} ${progress}%, rgba(255,255,255,0.1) ${progress}%, rgba(255,255,255,0.1) 100%)`,
+                }}
+              />
+              {/* 播放头 */}
+              <div 
+                className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 border-white shadow-lg pointer-events-none"
+                style={{ 
+                  left: `calc(${progress}% - 8px)`,
+                  backgroundColor: sequenceUnits[activeUnit].color,
+                }}
+              />
+            </div>
+
+            {/* 时间显示 */}
+            <div className="flex justify-between mt-1">
+              <span className="micro text-white/50">
+                {((progress / 100) * totalDuration).toFixed(1)}s
+              </span>
+              <span className="micro text-white/50">{totalDuration}s</span>
+            </div>
+          </div>
+
+          {/* 播放控制按钮 */}
+          <div className="flex items-center justify-center gap-3">
+            <button
+              onClick={() => setProgress(0)}
+              className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-sm flex items-center justify-center active:scale-90 transition-all border border-white/20"
+            >
+              <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M8.445 14.832A1 1 0 0010 14v-2.798l5.445 3.63A1 1 0 0017 14V6a1 1 0 00-1.555-.832L10 8.798V6a1 1 0 00-1.555-.832l-6 4a1 1 0 000 1.664l6 4z" />
+              </svg>
+            </button>
+
+            <button
+              onClick={togglePlay}
+              className="w-16 h-16 rounded-full bg-brand-gradient flex items-center justify-center active:scale-90 transition-all shadow-lg"
+            >
+              {isPlaying ? (
+                <svg className="w-7 h-7 text-white" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                </svg>
+              ) : (
+                <Play className="w-7 h-7 text-white ml-1" strokeWidth={2.5} fill="white" />
+              )}
+            </button>
+
+            <button
+              onClick={() => setProgress(100)}
+              className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-sm flex items-center justify-center active:scale-90 transition-all border border-white/20"
+            >
+              <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M4.555 5.168A1 1 0 003 6v8a1 1 0 001.555.832L10 11.202V14a1 1 0 001.555.832l6-4a1 1 0 000-1.664l-6-4A1 1 0 0010 6v2.798l-5.445-3.63z" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

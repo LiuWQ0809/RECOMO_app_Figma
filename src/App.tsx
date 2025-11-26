@@ -11,6 +11,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'discover' | 'create' | 'my'>('discover');
   const [selectedTemplate, setSelectedTemplate] = useState<any>(null);
   const [isLiveShooting, setIsLiveShooting] = useState(false);
+  const [isPreviewMode, setIsPreviewMode] = useState(false);
   const [showSequenceEditor, setShowSequenceEditor] = useState(false);
   const [savedShots, setSavedShots] = useState<any[]>([]);
   const [savedSequences, setSavedSequences] = useState<any[]>([]);
@@ -26,12 +27,21 @@ export default function App() {
   const handleBackToDiscover = () => {
     setSelectedTemplate(null);
     setIsLiveShooting(false);
+    setIsPreviewMode(false);
     setActiveTab('discover');
   };
 
   const handleStartShooting = (template: any) => {
     setSelectedTemplate(template);
     setIsLiveShooting(true);
+    setIsPreviewMode(false);
+    // Already on 'create' tab
+  };
+
+  const handlePreview = (template: any) => {
+    setSelectedTemplate(template);
+    setIsLiveShooting(true);
+    setIsPreviewMode(true);
     // Already on 'create' tab
   };
 
@@ -70,11 +80,13 @@ export default function App() {
                     template={selectedTemplate} 
                     onBack={handleBackToDiscover}
                     onStartShooting={handleStartShooting}
+                    onPreview={handlePreview}
                   />
                 ) : (
                   <CreatePage 
                     activeTemplate={isLiveShooting ? selectedTemplate : null}
                     onSaveShot={handleSaveShot}
+                    isPreview={isPreviewMode}
                   />
                 )
               )}
