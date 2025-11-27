@@ -45,61 +45,41 @@ export default function TemplatePreparePage({ template, onBack, onStartShooting,
   const [sequenceUnits, setSequenceUnits] = useState<SequenceUnit[]>([
     {
       id: '1',
-      type: 'C',
-      code: 'C2',
-      name: '急速倒退',
-      duration: 8,
-      params: {
-        distance: 5.2,
-        speed: 0.65,
-        height: 1.5,
-        angle: 0,
-      },
-    },
-    {
-      id: '2',
-      type: 'S',
-      code: 'S1',
-      name: '静态特写',
-      duration: 3,
-      params: {
-        count: 5,
-        interval: 0.6,
-      },
-    },
-    {
-      id: '3',
-      type: 'POI',
-      code: 'POI',
-      name: '兴趣点标记',
-      duration: 0,
-      params: {
-        points: 3,
-      },
-    },
-    {
-      id: '4',
-      type: 'C',
-      code: 'C1',
-      name: '上升展开',
-      duration: 6,
-      params: {
-        distance: 3.2,
-        speed: 0.5,
-        height: 2.5,
-        angle: 15,
-      },
-    },
-    {
-      id: '5',
       type: 'F',
       code: 'F1',
-      name: '跟随拍摄',
-      duration: 10,
+      name: 'Lead Follow',
+      duration: 6,
       params: {
         distance: 2.0,
         speed: 0.4,
         mode: 'smooth',
+      },
+    },
+    {
+      id: '2',
+      type: 'C',
+      code: 'C2',
+      name: '360度环绕',
+      duration: 12,
+      params: {
+        distance: 3.0,
+        speed: 0.5,
+        height: 1.5,
+        angle: 0,
+        rotation: 360,
+      },
+    },
+    {
+      id: '3',
+      type: 'C',
+      code: 'C1',
+      name: '缓慢拉远',
+      duration: 8,
+      params: {
+        distance: 5.0,
+        speed: 0.3,
+        height: 1.8,
+        angle: 10,
       },
     },
   ]);
@@ -2273,12 +2253,11 @@ function SequencePreview({ onClose }: { onClose: () => void }) {
   const [viewAngle, setViewAngle] = useState<'top' | 'side' | 'follow' | 'free'>('top');
   const [showComparison, setShowComparison] = useState(false);
 
-  // 模拟 sequence 单元
+  // 模拟 sequence 单元 - 与 Scene3DView 的阶段定义保持一致
   const sequenceUnits = [
-    { code: 'C2', name: '急速倒退', duration: 8, color: '#00A8E8' },
-    { code: 'S1', name: '静态特写', duration: 3, color: '#FFB800' },
-    { code: 'C1', name: '上升展开', duration: 6, color: '#00A8E8' },
-    { code: 'F1', name: '跟随拍摄', duration: 10, color: '#00DC82' },
+    { code: 'F1', name: 'Lead Follow', duration: 6, color: '#00DC82' },
+    { code: 'C2', name: '360度环绕', duration: 12, color: '#00A8E8' },
+    { code: 'C1', name: '缓慢拉远', duration: 8, color: '#0080FF' },
   ];
 
   const totalDuration = sequenceUnits.reduce((sum, unit) => sum + unit.duration, 0);
