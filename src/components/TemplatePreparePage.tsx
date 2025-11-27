@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Play, Camera, Zap, Music, MapPin, CheckCircle2, ChevronRight, Sparkles, Clock, Ruler, Wind, Video, Image as ImageIcon, UserPlus, Settings, ChevronDown, ChevronUp } from 'lucide-react';
+import { ImageWithFallback } from './figma/ImageWithFallback';
+
+// 相机图标
+const cameraIcon = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJjdXJyZW50Q29sb3IiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cGF0aCBkPSJNMjMgMTlhMiAyIDAgMCAxLTIgMkg1YTIgMiAwIDAgMS0yLTJWOGEyIDIgMCAwIDEgMi0yaDRsMi0zaDZsMiAzaDRhMiAyIDAgMCAxIDIgMnoiPjwvcGF0aD48Y2lyY2xlIGN4PSIxMiIgY3k9IjEzIiByPSI0Ij48L2NpcmNsZT48L3N2Zz4=';
 
 interface TemplatePageProps {
   template: any;
@@ -1959,144 +1963,303 @@ function Scene3DView({
   progress: number;
   version: 'original' | 'optimized';
 }) {
-  // 根据进度计算相机位置（简化的2D表示）
-  const cameraX = 50 + (progress / 100) * 30 * (version === 'optimized' ? 0.92 : 1);
-  const cameraY = 50 - (progress / 100) * 20;
+  // Sequence定义: F1(0-23%) → C2(23-69%) → C1(69-100%)
+  // F1: 6秒, C2: 12秒, C1: 8秒, 总计: 26秒
+  const F1_END = 23.08; // 6/26
+  const C2_END = 69.23; // (6+12)/26
+  
+  // 计算Subject和Camera的位置
+  const getPositions = () => {
+    let subjectX = 50, subjectY = 50;
+    let cameraX = 50, cameraY = 50, cameraZ = 0, rotation = 0, scale = 1;
+    
+    if (progress <= F1_END) {
+      // F1: Lead Follow - Camera引导，Subject跟随
+      const localProgress = progress / F1_END; // 0-1
+      const moveDistance = localProgress * 30;
+      
+      // Camera在前引导
+      cameraX = 50;
+      cameraY = 70 - moveDistance;
+      cameraZ = 2;
+      rotation = 0;
+      
+      // Subject跟随Camera，稍微滞后
+      const subjectDelay = 0.15; // 滞后系数
+      const delayedProgress = Math.max(0, localProgress - subjectDelay) / (1 - subjectDelay);
+      subjectX = 50;
+      subjectY = 75 - delayedProgress * 30;
+      
+    } else if (progress <= C2_END) {
+      // C2: 360度环绕 - Subject静止在目标位置，Camera环绕
+      const localProgress = (progress - F1_END) / (C2_END - F1_END); // 0-1
+      const angle = localProgress * Math.PI * 2; // 0 to 2π
+      const radius = 25 * (version === 'optimized' ? 0.9 : 1);
+      
+      // Subject静止在目标位置
+      subjectX = 50;
+      subjectY = 40;
+      
+      // Camera围绕Subject旋转
+      cameraX = subjectX + Math.cos(angle) * radius;
+      cameraY = subjectY + Math.sin(angle) * radius;
+      cameraZ = 5;
+      rotation = angle * (180 / Math.PI) + 90;
+      
+    } else {
+      // C1: 缓慢拉远 - 从环绕结束位置向后拉
+      const localProgress = (progress - C2_END) / (100 - C2_END); // 0-1
+      const pullBackDistance = localProgress * 25;
+      
+      // Subject保持在目标位置
+      subjectX = 50;
+      subjectY = 40;
+      
+      // Camera从环绕结束位置（0度，即右侧）向后拉远
+      cameraX = 50 + 25 * (version === 'optimized' ? 0.9 : 1) + pullBackDistance;
+      cameraY = 40;
+      cameraZ = 10 + pullBackDistance * 0.5;
+      rotation = 90; // 保持朝向Subject
+      scale = 1 - localProgress * 0.2;
+    }
+    
+    return { subjectX, subjectY, cameraX, cameraY, cameraZ, rotation, scale };
+  };
+
+  const { subjectX, subjectY, cameraX, cameraY, cameraZ, rotation, scale } = getPositions();
 
   const getViewTransform = () => {
     switch (viewAngle) {
       case 'top':
-        return 'perspective(800px) rotateX(60deg)';
+        return 'perspective(1200px) rotateX(70deg)';
       case 'side':
-        return 'perspective(800px) rotateY(-20deg) rotateX(20deg)';
+        return 'perspective(1000px) rotateY(-30deg) rotateX(30deg)';
       case 'follow':
-        return 'perspective(600px) rotateX(10deg)';
+        return 'perspective(800px) rotateX(15deg)';
       case 'free':
-        return 'perspective(800px) rotateX(45deg) rotateY(15deg)';
+        return `perspective(1000px) rotateX(50deg) rotateY(${rotation * 0.1}deg)`;
     }
   };
 
+  // 生成360度轨迹路径（围绕Subject的目标位置）
+  const generateOrbitPath = () => {
+    const centerX = 50; // Subject的目标X位置
+    const centerY = 40; // Subject的目标Y位置
+    const radius = 25 * (version === 'optimized' ? 0.9 : 1);
+    const points: string[] = [];
+    
+    for (let i = 0; i <= 360; i += 10) {
+      const angle = (i * Math.PI) / 180;
+      const x = centerX + Math.cos(angle) * radius;
+      const y = centerY + Math.sin(angle) * radius;
+      points.push(`${i === 0 ? 'M' : 'L'} ${x} ${y}`);
+    }
+    
+    return points.join(' ') + ' Z';
+  };
+
   return (
-    <div className="w-full h-full bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 relative overflow-hidden">
+    <div className="w-full h-full bg-gradient-to-br from-[#0a0a0a] via-[#1a1a2e] to-[#0f1419] relative overflow-hidden">
       {/* 3D 场景容器 */}
       <div 
-        className="absolute inset-0 transition-transform duration-500"
+        className="absolute inset-0 transition-transform duration-700"
         style={{ transform: getViewTransform() }}
       >
         {/* 地面网格 */}
         <div 
-          className="absolute inset-0 opacity-30"
+          className="absolute inset-0 opacity-20"
           style={{
-            backgroundImage: 'linear-gradient(0deg, transparent 24%, rgba(0,168,232,.5) 25%, rgba(0,168,232,.5) 26%, transparent 27%, transparent 74%, rgba(0,168,232,.5) 75%, rgba(0,168,232,.5) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0,168,232,.5) 25%, rgba(0,168,232,.5) 26%, transparent 27%, transparent 74%, rgba(0,168,232,.5) 75%, rgba(0,168,232,.5) 76%, transparent 77%, transparent)',
-            backgroundSize: '40px 40px',
-            transform: 'translateZ(-50px)',
+            backgroundImage: 'linear-gradient(0deg, transparent 24%, rgba(0,220,130,.4) 25%, rgba(0,220,130,.4) 26%, transparent 27%, transparent 74%, rgba(0,220,130,.4) 75%, rgba(0,220,130,.4) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0,220,130,.4) 25%, rgba(0,220,130,.4) 26%, transparent 27%, transparent 74%, rgba(0,220,130,.4) 75%, rgba(0,220,130,.4) 76%, transparent 77%, transparent)',
+            backgroundSize: '50px 50px',
+            transform: 'translateZ(-100px)',
           }}
         />
 
-        {/* 运动轨迹线 */}
+        {/* 拍摄对象 (Subject) */}
+        <div
+          className="absolute transition-all duration-500"
+          style={{
+            left: `${subjectX}%`,
+            top: `${subjectY}%`,
+            transform: `translate(-50%, -50%) translateZ(${20}px) scale(${scale})`,
+          }}
+        >
+          {/* 主体 */}
+          <div className="relative">
+            <div className="w-16 h-20 bg-gradient-to-br from-[#00DC82] to-[#00A8E8] rounded-lg shadow-2xl flex items-center justify-center border-2 border-white/20">
+              <div className="text-3xl">🎯</div>
+            </div>
+            {/* 对象底座 */}
+            <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-20 h-4 bg-black/40 blur-md rounded-full" />
+          </div>
+          
+          {/* Subject标签 */}
+          <div className="absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap">
+            <div className="px-3 py-1 bg-[#00DC82]/20 backdrop-blur-sm rounded-lg border border-[#00DC82]/40">
+              <span className="caption font-bold text-[#00DC82]">Subject</span>
+            </div>
+          </div>
+        </div>
+
+        {/* 运动轨迹 */}
         <svg 
-          className="absolute inset-0 w-full h-full"
-          style={{ transform: 'translateZ(0px)' }}
+          className="absolute inset-0 w-full h-full pointer-events-none"
+          style={{ transform: 'translateZ(1px)' }}
         >
           <defs>
-            <linearGradient id={`gradient-${version}`} x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor={version === 'optimized' ? '#00A8E8' : '#888'} stopOpacity="0.3" />
-              <stop offset="100%" stopColor={version === 'optimized' ? '#0080FF' : '#666'} stopOpacity="0.8" />
+            <linearGradient id={`orbit-gradient-${version}`} x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor="#00DC82" stopOpacity="0.6" />
+              <stop offset="50%" stopColor="#00A8E8" stopOpacity="0.6" />
+              <stop offset="100%" stopColor="#0080FF" stopOpacity="0.6" />
             </linearGradient>
           </defs>
-          <path
-            d={`M ${50} ${70} Q ${65} ${60}, ${80} ${50} T ${100} ${40}`}
-            fill="none"
-            stroke={`url(#gradient-${version})`}
+          
+          {/* F1 Lead Follow路径 - Camera引导路径 */}
+          <line
+            x1="50%"
+            y1="70%"
+            x2="50%"
+            y2="40%"
+            stroke="#00DC82"
             strokeWidth="3"
-            strokeDasharray={version === 'original' ? '5,5' : '0'}
-            opacity="0.6"
+            strokeDasharray="8,4"
+            opacity={progress <= F1_END ? "0.8" : "0.3"}
           />
-          {/* 已完成路径 */}
+          
+          {/* Subject跟随轨迹（稍微滞后） */}
+          <line
+            x1="50%"
+            y1="75%"
+            x2="50%"
+            y2="45%"
+            stroke="#00DC82"
+            strokeWidth="2"
+            strokeDasharray="4,4"
+            opacity={progress <= F1_END ? "0.5" : "0.2"}
+          />
+          
+          {/* C2 环绕路径 */}
           <path
-            d={`M ${50} ${70} Q ${65} ${60}, ${80} ${50}`}
+            d={generateOrbitPath()}
             fill="none"
-            stroke={version === 'optimized' ? '#00A8E8' : '#888'}
-            strokeWidth="4"
-            strokeDasharray={`${progress * 2}, 200`}
-            opacity="1"
+            stroke={`url(#orbit-gradient-${version})`}
+            strokeWidth="3"
+            strokeDasharray={version === 'original' ? '8,4' : '0'}
+            opacity={progress > F1_END && progress <= C2_END ? "0.8" : "0.3"}
           />
+          
+          {/* C1 拉远路径 - 从环绕结束点向右拉远 */}
+          <line
+            x1={`${50 + 25 * (version === 'optimized' ? 0.9 : 1)}%`}
+            y1="40%"
+            x2={`${50 + 25 * (version === 'optimized' ? 0.9 : 1) + 25}%`}
+            y2="40%"
+            stroke="#0080FF"
+            strokeWidth="3"
+            strokeDasharray="8,4"
+            opacity={progress > C2_END ? "0.8" : "0.3"}
+          />
+
+          {/* 已完成轨迹高亮 */}
+          {progress > F1_END && progress <= C2_END && (
+            <path
+              d={generateOrbitPath()}
+              fill="none"
+              stroke="#00A8E8"
+              strokeWidth="5"
+              strokeDasharray={`${((progress - F1_END) / (C2_END - F1_END)) * 157}, 500`}
+              strokeLinecap="round"
+              opacity="1"
+            />
+          )}
         </svg>
 
         {/* 相机位置指示器 */}
         <div
-          className="absolute w-8 h-8 transition-all duration-300"
+          className="absolute w-12 h-12 transition-all duration-300"
           style={{
             left: `${cameraX}%`,
             top: `${cameraY}%`,
-            transform: 'translate(-50%, -50%) translateZ(10px)',
+            transform: `translate(-50%, -50%) translateZ(${cameraZ}px) rotate(${rotation}deg)`,
           }}
         >
-          <div className={`w-full h-full rounded-lg ${version === 'optimized' ? 'bg-brand' : 'bg-white/50'} shadow-lg animate-pulse flex items-center justify-center`}>
-            <Camera className="w-5 h-5 text-white" strokeWidth={2.5} />
+          <div className={`w-full h-full rounded-xl ${version === 'optimized' ? 'bg-white' : 'bg-gray-400'} shadow-2xl flex items-center justify-center border-2 border-white/30 p-1.5`}>
+            <ImageWithFallback src={cameraIcon} alt="Camera" className="w-full h-full object-contain" />
           </div>
+          
           {/* 视角方向指示 */}
           <div 
-            className={`absolute w-12 h-0.5 top-1/2 left-full ${version === 'optimized' ? 'bg-brand' : 'bg-white/50'}`}
-            style={{ 
-              transformOrigin: 'left center',
-              transform: `rotate(${-progress * 0.5}deg)`,
-            }}
+            className={`absolute w-16 h-1 top-1/2 left-full origin-left ${version === 'optimized' ? 'bg-gradient-to-r from-brand to-transparent' : 'bg-gradient-to-r from-white/50 to-transparent'} rounded-full`}
+            style={{ transform: 'translateY(-50%)' }}
           />
+          
+          {/* Camera标签 */}
+          <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap">
+            <div className={`px-2.5 py-1 ${version === 'optimized' ? 'bg-brand/20 border-brand/40' : 'bg-white/10 border-white/20'} backdrop-blur-sm rounded-lg border`}>
+              <span className={`caption font-bold ${version === 'optimized' ? 'text-brand' : 'text-white/70'}`}>Camera</span>
+            </div>
+          </div>
         </div>
 
-        {/* POI 标记点 */}
-        {[
-          { x: 60, y: 65, label: 'POI 1' },
-          { x: 75, y: 55, label: 'POI 2' },
-          { x: 90, y: 45, label: 'POI 3' },
-        ].map((poi, index) => (
-          <div
-            key={index}
-            className="absolute"
-            style={{
-              left: `${poi.x}%`,
-              top: `${poi.y}%`,
-              transform: 'translate(-50%, -50%) translateZ(5px)',
-            }}
-          >
-            <div className="w-6 h-6 rounded-full bg-[#A855F7]/30 border-2 border-[#A855F7] flex items-center justify-center">
-              <MapPin className="w-3.5 h-3.5 text-[#A855F7]" strokeWidth={2.5} />
-            </div>
-            <span className="absolute top-full mt-1 micro text-[#A855F7] whitespace-nowrap">
-              {poi.label}
-            </span>
-          </div>
-        ))}
-
-        {/* 障碍物 */}
+        {/* 场景装饰元素 */}
         <div
-          className="absolute w-16 h-20 bg-gradient-to-t from-gray-700 to-gray-600 rounded-t-lg border border-white/20"
+          className="absolute w-12 h-16 bg-gradient-to-t from-gray-700 to-gray-600 rounded-t-lg border border-white/10 opacity-40"
           style={{
-            left: '55%',
-            top: '60%',
+            left: '25%',
+            top: '70%',
             transform: 'translate(-50%, -50%) translateZ(0px)',
           }}
         />
         <div
-          className="absolute w-12 h-16 bg-gradient-to-t from-gray-700 to-gray-600 rounded-t-lg border border-white/20"
+          className="absolute w-10 h-14 bg-gradient-to-t from-gray-700 to-gray-600 rounded-t-lg border border-white/10 opacity-40"
           style={{
-            left: '85%',
-            top: '48%',
+            left: '75%',
+            top: '30%',
             transform: 'translate(-50%, -50%) translateZ(0px)',
           }}
         />
       </div>
 
-      {/* 版本标签（仅在对比模式需要） */}
+      {/* 阶段指示器 */}
+      <div className="absolute top-4 left-4 space-y-1">
+        <div className={`px-3 py-1.5 backdrop-blur-sm rounded-lg border transition-all ${
+          progress <= F1_END 
+            ? 'bg-[#00DC82]/30 border-[#00DC82]/60' 
+            : 'bg-black/40 border-white/10'
+        }`}>
+          <span className={`caption font-bold ${progress <= F1_END ? 'text-[#00DC82]' : 'text-white/40'}`}>
+            F1 · Lead Follow
+          </span>
+        </div>
+        <div className={`px-3 py-1.5 backdrop-blur-sm rounded-lg border transition-all ${
+          progress > F1_END && progress <= C2_END
+            ? 'bg-[#00A8E8]/30 border-[#00A8E8]/60' 
+            : 'bg-black/40 border-white/10'
+        }`}>
+          <span className={`caption font-bold ${progress > F1_END && progress <= C2_END ? 'text-[#00A8E8]' : 'text-white/40'}`}>
+            C2 · 360° Orbit
+          </span>
+        </div>
+        <div className={`px-3 py-1.5 backdrop-blur-sm rounded-lg border transition-all ${
+          progress > C2_END
+            ? 'bg-[#0080FF]/30 border-[#0080FF]/60' 
+            : 'bg-black/40 border-white/10'
+        }`}>
+          <span className={`caption font-bold ${progress > C2_END ? 'text-[#0080FF]' : 'text-white/40'}`}>
+            C1 · Pull Back
+          </span>
+        </div>
+      </div>
+
+      {/* 版本标签 */}
       {version === 'original' && (
         <div className="absolute bottom-4 left-4 px-3 py-1.5 bg-black/60 backdrop-blur-sm rounded-lg border border-white/20">
-          <span className="caption text-white/70">路径较长，耗时 +8%</span>
+          <span className="caption text-white/70">原始路径 · 耗时 +15%</span>
         </div>
       )}
       {version === 'optimized' && (
         <div className="absolute bottom-4 right-4 px-3 py-1.5 bg-brand/20 backdrop-blur-sm rounded-lg border border-brand/40">
-          <span className="caption text-brand font-semibold">AI优化，避开障碍物</span>
+          <span className="caption text-brand font-semibold">✨ AI优化 · 更流畅</span>
         </div>
       )}
     </div>
