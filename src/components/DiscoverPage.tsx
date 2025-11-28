@@ -10,7 +10,33 @@ import golferImage from 'figma:asset/d927901e7682ac4e85fcfd5486c41b2a1c483e71.pn
 import reidTravelImage from 'figma:asset/8c202670263e15a12c2606c46b3a2cea7b943ecf.png';
 
 // Mock data
+// 插入本地 Pokerface 视频到首位，videoUrl 与 thumbnail 使用 /data 路径
 const mockFeedData = [
+  {
+    id: 100,
+    videoUrl: '/data/Pokerface.mp4',
+    thumbnail: '/data/Pokerface.png',
+    forceThumbnail: true,
+    title: 'PokerFace',
+    author: 'XianBo',
+    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&h=100&fit=crop',
+    likes: 18600,
+    comments: 723,
+    sequenceName: '追光者',
+    sequenceCode: 'C2',
+    tag: '官方',
+    duration: '0:30',
+    downloads: 6800,
+    rating: 4.9,
+    difficulty: 'medium',
+    credits: 100,
+    isLiked: false,
+    isSaved: false,
+    distance: '2.8m',
+    speed: '中速',
+    time: '30s',
+  },
+
   {
     id: 0,
     videoUrl: '/data/飞书20251126-163535.mp4',

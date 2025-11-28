@@ -41,45 +41,48 @@ export default function TemplatePreparePage({ template, onBack, onStartShooting,
   const [showTemplateScene, setShowTemplateScene] = useState(false);
   const [showPreviewSimulator, setShowPreviewSimulator] = useState(false);
 
-  // 模拟 Sequence 数据 - 实际应该从 template 中获取
+  // 模拟 Sequence 数据 - PokerFace (XianBo) 配置，与 Preview 保持一致
   const [sequenceUnits, setSequenceUnits] = useState<SequenceUnit[]>([
     {
       id: '1',
-      type: 'F',
-      code: 'F1',
-      name: 'Lead Follow',
-      duration: 6,
+      type: 'C',
+      code: 'C15',
+      name: '降旋 + Tracking',
+      duration: 9,
       params: {
-        distance: 2.0,
-        speed: 0.4,
-        mode: 'smooth',
+        distance: 3.0,
+        speed: 0.5,
+        height: 3.0,
+        angle: -45,
+        tracking: true,
       },
     },
     {
       id: '2',
       type: 'C',
-      code: 'C2',
-      name: '360度环绕',
-      duration: 12,
+      code: 'C14',
+      name: '升旋 + Tracking',
+      duration: 9,
       params: {
-        distance: 3.0,
-        speed: 0.5,
+        distance: 2.5,
+        speed: 0.4,
         height: 1.5,
-        angle: 0,
-        rotation: 360,
+        angle: 45,
+        tracking: true,
       },
     },
     {
       id: '3',
       type: 'C',
-      code: 'C1',
-      name: '缓慢拉远',
+      code: 'C2',
+      name: '推进 + Tracking',
       duration: 8,
       params: {
-        distance: 5.0,
+        distance: 0.8,
         speed: 0.3,
-        height: 1.8,
-        angle: 10,
+        height: 0.3,
+        angle: 0,
+        tracking: true,
       },
     },
   ]);
@@ -1937,11 +1940,13 @@ function generateMockCameraPath() {
 function Scene3DView({ 
   viewAngle, 
   progress, 
-  version 
+  version,
+  template
 }: { 
   viewAngle: 'top' | 'side' | 'follow' | 'free'; 
   progress: number;
   version: 'original' | 'optimized';
+  template?: any;
 }) {
   // Sequence定义: F1(0-23%) → C2(23-69%) → C1(69-100%)
   // F1: 6秒, C2: 12秒, C1: 8秒, 总计: 26秒
@@ -1952,6 +1957,68 @@ function Scene3DView({
   const getPositions = () => {
     let subjectX = 50, subjectY = 50;
     let cameraX = 50, cameraY = 50, cameraZ = 0, rotation = 0, scale = 1;
+    
+    // 检查是否为 PokerFace 特殊轨迹
+    if (template?.title === 'PokerFace') {
+      // PokerFace 3段式轨迹 - 人物拍摄运镜:
+      // C15 降旋 (0-34.6%): 右上远处 → 正面下方近距离
+      // C14 升旋 (34.6-69.2%): 正面下方 → 左上方中等距离
+      // C2 推进 (69.2-100%): 左上方 → 左侧面特写
+      // Subject静止在中心
+      subjectX = 50;
+      subjectY = 50;
+      
+      // 3段分段点: 9s, 18s, 26s -> 34.6%, 69.2%, 100%
+      const C15_END = 34.6; // 9/26
+      const C14_END = 69.2; // 18/26
+      
+      const radius = 32 * (version === 'optimized' ? 0.85 : 1);
+      
+      if (progress <= C15_END) {
+        // 第1段 C15: 降旋 - 右上远处 → 正面下方 (Z: 3m → 0.5m)
+        const localProgress = progress / C15_END;
+        const startX = subjectX + radius * 0.8; // 右
+        const startY = subjectY - radius * 0.8; // 上
+        const endX = subjectX;
+        const endY = subjectY + radius * 0.9; // 下
+        
+        cameraX = startX + (endX - startX) * localProgress;
+        cameraY = startY + (endY - startY) * localProgress;
+        cameraZ = 3 - localProgress * 2.5; // 从3降到0.5，快速接近
+        rotation = Math.atan2(cameraY - subjectY, cameraX - subjectX) * (180 / Math.PI) + 90;
+        scale = 0.7 + localProgress * 0.6; // Subject从小变大
+        
+      } else if (progress <= C14_END) {
+        // 第2段 C14: 升旋 - 正面下方 → 左上方 (Z: 0.5m → 1.5m)
+        const localProgress = (progress - C15_END) / (C14_END - C15_END);
+        const startX = subjectX;
+        const startY = subjectY + radius * 0.9; // 下
+        const endX = subjectX - radius * 0.8; // 左
+        const endY = subjectY - radius * 0.8; // 上
+        
+        cameraX = startX + (endX - startX) * localProgress;
+        cameraY = startY + (endY - startY) * localProgress;
+        cameraZ = 0.5 + localProgress * 1.0; // 从0.5升到1.5
+        rotation = Math.atan2(cameraY - subjectY, cameraX - subjectX) * (180 / Math.PI) + 90;
+        scale = 1.3 - localProgress * 0.3; // Subject逐渐适中
+        
+      } else {
+        // 第3段 C2: 推进 - 左上方 → 左侧面特写 (Z: 1.5m → 0.3m)
+        const localProgress = (progress - C14_END) / (100 - C14_END);
+        const startX = subjectX - radius * 0.8; // 左
+        const startY = subjectY - radius * 0.8; // 上
+        const endX = subjectX - radius * 0.9; // 左侧面
+        const endY = subjectY; // 正侧面，不到正面
+        
+        cameraX = startX + (endX - startX) * localProgress;
+        cameraY = startY + (endY - startY) * localProgress;
+        cameraZ = 1.5 - localProgress * 1.2; // 从1.5降到0.3，推进特写
+        rotation = Math.atan2(cameraY - subjectY, cameraX - subjectX) * (180 / Math.PI) + 90;
+        scale = 1.0 + localProgress * 0.2; // 推进特写，Subject变大
+      }
+      
+      return { subjectX, subjectY, cameraX, cameraY, cameraZ, rotation, scale };
+    }
     
     if (progress <= F1_END) {
       // F1: Lead Follow - Camera引导，Subject跟随
@@ -2011,13 +2078,13 @@ function Scene3DView({
   const getViewTransform = () => {
     switch (viewAngle) {
       case 'top':
-        return 'perspective(1200px) rotateX(70deg)';
+        return 'perspective(1400px) rotateX(65deg) scale(1.05)';
       case 'side':
-        return 'perspective(1000px) rotateY(-30deg) rotateX(30deg)';
+        return 'perspective(1200px) rotateY(-35deg) rotateX(35deg)';
       case 'follow':
-        return 'perspective(800px) rotateX(15deg)';
+        return 'perspective(1000px) rotateX(20deg) scale(1.1)';
       case 'free':
-        return `perspective(1000px) rotateX(50deg) rotateY(${rotation * 0.1}deg)`;
+        return `perspective(1200px) rotateX(45deg) rotateY(${rotation * 0.15}deg)`;
     }
   };
 
@@ -2037,6 +2104,36 @@ function Scene3DView({
     
     return points.join(' ') + ' Z';
   };
+
+  // 生成 PokerFace 3段式轨迹路径
+  const generatePokerFacePath = () => {
+    const centerX = 50;
+    const centerY = 50;
+    const radius = 32 * (version === 'optimized' ? 0.85 : 1);
+    
+    // 第1点：右上方远处 (C15起点)
+    const p1X = centerX + radius * 0.8;
+    const p1Y = centerY - radius * 0.8;
+    
+    // 第2点：正面下方近距离 (C15→C14)
+    const p2X = centerX;
+    const p2Y = centerY + radius * 0.9;
+    
+    // 第3点：左上方中距离 (C14→C2)
+    const p3X = centerX - radius * 0.8;
+    const p3Y = centerY - radius * 0.8;
+    
+    // 第4点：左侧面特写 (C2终点)
+    const p4X = centerX - radius * 0.9;
+    const p4Y = centerY;
+    
+    // 使用贝塞尔曲线平滑连接
+    return `M ${p1X} ${p1Y} Q ${p2X + radius * 0.3} ${p2Y - radius * 0.2} ${p2X} ${p2Y} Q ${p3X + radius * 0.2} ${p3Y + radius * 0.3} ${p3X} ${p3Y} Q ${p4X} ${p4Y - radius * 0.3} ${p4X} ${p4Y}`;
+  };
+
+  // PokerFace 3段分段点
+  const C15_END = 34.6;
+  const C14_END = 69.2;
 
   return (
     <div className="w-full h-full bg-gradient-to-br from-[#0a0a0a] via-[#1a1a2e] to-[#0f1419] relative overflow-hidden">
@@ -2154,29 +2251,57 @@ function Scene3DView({
           )}
         </svg>
 
-        {/* 相机位置指示器 */}
+        {/* 相机位置指示器 - 增强3D效果 */}
         <div
-          className="absolute w-12 h-12 transition-all duration-300"
+          className="absolute transition-all duration-300"
           style={{
             left: `${cameraX}%`,
             top: `${cameraY}%`,
-            transform: `translate(-50%, -50%) translateZ(${cameraZ}px) rotate(${rotation}deg)`,
+            // PokerFace特殊处理：相机大小和透明度随Z轴变化（透视效果）
+            width: template?.title === 'PokerFace' ? `${60 * (1 - (cameraZ - 5) / 25)}px` : '52px',
+            height: template?.title === 'PokerFace' ? `${60 * (1 - (cameraZ - 5) / 25)}px` : '52px',
+            opacity: template?.title === 'PokerFace' ? Math.max(0.65, 1 - (cameraZ - 5) / 25) : 1,
+            transform: `translate(-50%, -50%) translateZ(${cameraZ}px) rotate(${rotation}deg) scale(${template?.title === 'PokerFace' ? (1.6 - cameraZ / 18) : 1})`,
+            filter: template?.title === 'PokerFace' ? `drop-shadow(0 ${cameraZ * 0.5}px ${cameraZ * 1.2}px rgba(0,0,0,${0.5 - cameraZ / 40}))` : 'drop-shadow(0 4px 12px rgba(0,0,0,0.3))',
           }}
         >
-          <div className={`w-full h-full rounded-xl ${version === 'optimized' ? 'bg-white' : 'bg-gray-400'} shadow-2xl flex items-center justify-center border-2 border-white/30 p-1.5`}>
-            <ImageWithFallback src={cameraIcon} alt="Camera" className="w-full h-full object-contain" />
+          {/* 相机本体 - 增强3D层次 */}
+          <div className="relative">
+            {/* 外层光晕 */}
+            <div className={`absolute inset-0 rounded-xl blur-md ${version === 'optimized' ? 'bg-brand/30' : 'bg-white/20'}`} />
+            
+            {/* 相机主体 */}
+            <div className={`relative w-full h-full rounded-xl ${version === 'optimized' ? 'bg-gradient-to-br from-white to-gray-100' : 'bg-gradient-to-br from-gray-400 to-gray-500'} shadow-2xl flex items-center justify-center border-2 ${version === 'optimized' ? 'border-brand/40' : 'border-white/30'} p-2`}>
+              <ImageWithFallback src={cameraIcon} alt="Camera" className="w-full h-full object-contain" />
+            </div>
+            
+            {/* 底部阴影 */}
+            {template?.title === 'PokerFace' && (
+              <div 
+                className="absolute -bottom-1 left-1/2 -translate-x-1/2 bg-black/40 blur-lg rounded-full"
+                style={{
+                  width: `${60 * (1 - (cameraZ - 5) / 25)}px`,
+                  height: `${(60 * (1 - (cameraZ - 5) / 25)) / 8}px`,
+                }}
+              />
+            )}
           </div>
           
-          {/* 视角方向指示 */}
+          {/* 视角方向指示 - 增强视觉效果 */}
           <div 
-            className={`absolute w-16 h-1 top-1/2 left-full origin-left ${version === 'optimized' ? 'bg-gradient-to-r from-brand to-transparent' : 'bg-gradient-to-r from-white/50 to-transparent'} rounded-full`}
-            style={{ transform: 'translateY(-50%)' }}
+            className={`absolute top-1/2 left-full origin-left rounded-full ${version === 'optimized' ? 'bg-gradient-to-r from-brand/80 via-brand/40 to-transparent' : 'bg-gradient-to-r from-white/60 via-white/30 to-transparent'}`}
+            style={{ 
+              transform: 'translateY(-50%)',
+              width: template?.title === 'PokerFace' ? `${24 + (15 - cameraZ) * 2}px` : '20px',
+              height: '3px',
+              boxShadow: version === 'optimized' ? '0 0 8px rgba(0,168,232,0.5)' : 'none',
+            }}
           />
           
           {/* Camera标签 */}
-          <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap">
-            <div className={`px-2.5 py-1 ${version === 'optimized' ? 'bg-brand/20 border-brand/40' : 'bg-white/10 border-white/20'} backdrop-blur-sm rounded-lg border`}>
-              <span className={`caption font-bold ${version === 'optimized' ? 'text-brand' : 'text-white/70'}`}>Camera</span>
+          <div className="absolute -bottom-10 left-1/2 -translate-x-1/2 whitespace-nowrap">
+            <div className={`px-3 py-1.5 ${version === 'optimized' ? 'bg-brand/30 border-brand/50' : 'bg-white/15 border-white/25'} backdrop-blur-md rounded-lg border shadow-lg`}>
+              <span className={`caption font-bold ${version === 'optimized' ? 'text-brand' : 'text-white/80'}`}>Camera</span>
             </div>
           </div>
         </div>
@@ -2202,33 +2327,90 @@ function Scene3DView({
 
       {/* 阶段指示器 */}
       <div className="absolute top-4 left-4 space-y-1">
-        <div className={`px-3 py-1.5 backdrop-blur-sm rounded-lg border transition-all ${
-          progress <= F1_END 
-            ? 'bg-[#00DC82]/30 border-[#00DC82]/60' 
-            : 'bg-black/40 border-white/10'
-        }`}>
-          <span className={`caption font-bold ${progress <= F1_END ? 'text-[#00DC82]' : 'text-white/40'}`}>
-            F1 · Lead Follow
-          </span>
-        </div>
-        <div className={`px-3 py-1.5 backdrop-blur-sm rounded-lg border transition-all ${
-          progress > F1_END && progress <= C2_END
-            ? 'bg-[#00A8E8]/30 border-[#00A8E8]/60' 
-            : 'bg-black/40 border-white/10'
-        }`}>
-          <span className={`caption font-bold ${progress > F1_END && progress <= C2_END ? 'text-[#00A8E8]' : 'text-white/40'}`}>
-            C2 · 360° Orbit
-          </span>
-        </div>
-        <div className={`px-3 py-1.5 backdrop-blur-sm rounded-lg border transition-all ${
-          progress > C2_END
-            ? 'bg-[#0080FF]/30 border-[#0080FF]/60' 
-            : 'bg-black/40 border-white/10'
-        }`}>
-          <span className={`caption font-bold ${progress > C2_END ? 'text-[#0080FF]' : 'text-white/40'}`}>
-            C1 · Pull Back
-          </span>
-        </div>
+        {template?.title === 'PokerFace' ? (
+          /* PokerFace 专属阶段指示器 */
+          <>
+            <div className={`px-3 py-1.5 backdrop-blur-sm rounded-lg border transition-all ${
+              progress <= C15_END 
+                ? 'bg-[#FF6B6B]/30 border-[#FF6B6B]/60' 
+                : 'bg-black/40 border-white/10'
+            }`}>
+              <span className={`caption font-bold ${progress <= C15_END ? 'text-[#FF6B6B]' : 'text-white/40'}`}>
+                C15 · 降旋 + Tracking
+              </span>
+            </div>
+            <div className={`px-3 py-1.5 backdrop-blur-sm rounded-lg border transition-all ${
+              progress > C15_END && progress <= C14_END
+                ? 'bg-[#00A8E8]/30 border-[#00A8E8]/60' 
+                : 'bg-black/40 border-white/10'
+            }`}>
+              <span className={`caption font-bold ${progress > C15_END && progress <= C14_END ? 'text-[#00A8E8]' : 'text-white/40'}`}>
+                C14 · 升旋 + Tracking
+              </span>
+            </div>
+            <div className={`px-3 py-1.5 backdrop-blur-sm rounded-lg border transition-all ${
+              progress > C14_END
+                ? 'bg-[#FFB800]/30 border-[#FFB800]/60' 
+                : 'bg-black/40 border-white/10'
+            }`}>
+              <span className={`caption font-bold ${progress > C14_END ? 'text-[#FFB800]' : 'text-white/40'}`}>
+                C2 · 推进 + Tracking
+              </span>
+            </div>
+            
+            {/* Z轴距离指示器 */}
+            <div className="mt-3 px-3 py-2 bg-black/60 backdrop-blur-sm rounded-lg border border-white/20">
+              <div className="flex items-center gap-2 mb-1">
+                <div className="w-1.5 h-1.5 rounded-full bg-brand animate-pulse" />
+                <span className="caption text-white/70">相机距离</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="micro text-white/50">近</span>
+                <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-gradient-to-r from-[#00DC82] to-[#00A8E8] transition-all duration-300"
+                    style={{ width: `${((cameraZ - 0.3) / 2.7) * 100}%` }}
+                  />
+                </div>
+                <span className="micro text-white/50">远</span>
+              </div>
+              <div className="mt-1">
+                <span className="micro text-brand font-bold">{cameraZ.toFixed(1)}m</span>
+              </div>
+            </div>
+          </>
+        ) : (
+          /* 默认阶段指示器 */
+          <>
+            <div className={`px-3 py-1.5 backdrop-blur-sm rounded-lg border transition-all ${
+              progress <= F1_END 
+                ? 'bg-[#00DC82]/30 border-[#00DC82]/60' 
+                : 'bg-black/40 border-white/10'
+            }`}>
+              <span className={`caption font-bold ${progress <= F1_END ? 'text-[#00DC82]' : 'text-white/40'}`}>
+                F1 · Lead Follow
+              </span>
+            </div>
+            <div className={`px-3 py-1.5 backdrop-blur-sm rounded-lg border transition-all ${
+              progress > F1_END && progress <= C2_END
+                ? 'bg-[#00A8E8]/30 border-[#00A8E8]/60' 
+                : 'bg-black/40 border-white/10'
+            }`}>
+              <span className={`caption font-bold ${progress > F1_END && progress <= C2_END ? 'text-[#00A8E8]' : 'text-white/40'}`}>
+                C2 · 360° Orbit
+              </span>
+            </div>
+            <div className={`px-3 py-1.5 backdrop-blur-sm rounded-lg border transition-all ${
+              progress > C2_END
+                ? 'bg-[#0080FF]/30 border-[#0080FF]/60' 
+                : 'bg-black/40 border-white/10'
+            }`}>
+              <span className={`caption font-bold ${progress > C2_END ? 'text-[#0080FF]' : 'text-white/40'}`}>
+                C1 · Pull Back
+              </span>
+            </div>
+          </>
+        )}
       </div>
 
       {/* 版本标签 */}
@@ -2242,22 +2424,150 @@ function Scene3DView({
           <span className="caption text-brand font-semibold">✨ AI优化 · 更流畅</span>
         </div>
       )}
+      
+      {/* PokerFace Z轴侧视图 */}
+      {template?.title === 'PokerFace' && (
+        <div className="absolute bottom-4 left-4 w-48 h-32 bg-black/80 backdrop-blur-md rounded-xl border border-white/20 p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-1.5 h-1.5 rounded-full bg-brand" />
+            <span className="micro text-white/70 font-bold">Z轴侧视图</span>
+          </div>
+          
+          <svg className="w-full h-20" viewBox="0 0 180 80">
+            {/* 背景网格 */}
+            <defs>
+              <pattern id="side-grid" width="20" height="20" patternUnits="userSpaceOnUse">
+                <path d="M 20 0 L 0 0 0 20" fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth="0.5"/>
+              </pattern>
+            </defs>
+            <rect width="180" height="80" fill="url(#side-grid)" />
+            
+            {/* 地平线 */}
+            <line x1="0" y1="60" x2="180" y2="60" stroke="rgba(0,220,130,0.3)" strokeWidth="1" strokeDasharray="4,2" />
+            
+            {/* Subject位置（固定） */}
+            <circle cx="90" cy="60" r="4" fill="#00DC82" stroke="white" strokeWidth="1" />
+            <text x="90" y="72" textAnchor="middle" className="micro" fill="#00DC82">Subject</text>
+            
+            {/* 相机轨迹路径 - 3段式 */}
+            {(() => {
+              // 定义4个关键点的Z轴位置（转换为Y坐标，Z越大Y越小）
+              const points = [
+                { z: 3, y: 60 - 3 * 12, color: '#FF6B6B', label: '1', name: 'C15起点' },
+                { z: 0.5, y: 60 - 0.5 * 12, color: '#00A8E8', label: '2', name: 'C14起点' },
+                { z: 1.5, y: 60 - 1.5 * 12, color: '#FFB800', label: '3', name: 'C2起点' },
+                { z: 0.3, y: 60 - 0.3 * 12, color: '#FFB800', label: '4', name: 'C2定格' },
+              ];
+              
+              // 计算当前相机位置
+              let currentY = 60 - cameraZ * 12;
+              let currentColor = '#FF6B6B';
+              
+              if (progress <= C15_END) {
+                currentY = points[0].y + (points[1].y - points[0].y) * (progress / C15_END);
+                currentColor = '#FF6B6B';
+              } else if (progress <= C14_END) {
+                const localProgress = (progress - C15_END) / (C14_END - C15_END);
+                currentY = points[1].y + (points[2].y - points[1].y) * localProgress;
+                currentColor = '#00A8E8';
+              } else {
+                const localProgress = (progress - C14_END) / (100 - C14_END);
+                currentY = points[2].y + (points[3].y - points[2].y) * localProgress;
+                currentColor = '#FFB800';
+              }
+              
+              return (
+                <>
+                  {/* 连接线 */}
+                  <polyline
+                    points={points.map((p, i) => `${30 + i * 30},${p.y}`).join(' ')}
+                    fill="none"
+                    stroke="rgba(0,168,232,0.3)"
+                    strokeWidth="2"
+                    strokeDasharray="4,2"
+                  />
+                  
+                  {/* 关键点 */}
+                  {points.map((point, i) => {
+                    let isActive = false;
+                    if (i === 0) isActive = progress >= 0;
+                    else if (i === 1) isActive = progress >= C15_END;
+                    else if (i === 2) isActive = progress >= C14_END;
+                    else if (i === 3) isActive = progress >= 95;
+                    
+                    return (
+                      <g key={i}>
+                        <circle
+                          cx={30 + i * 30}
+                          cy={point.y}
+                          r="4"
+                          fill={isActive ? point.color : 'rgba(255,255,255,0.2)'}
+                          stroke="white"
+                          strokeWidth="1.5"
+                          opacity={isActive ? "1" : "0.4"}
+                        />
+                        <text
+                          x={30 + i * 30}
+                          y={point.y - 10}
+                          textAnchor="middle"
+                          className="micro"
+                          fill={isActive ? point.color : 'rgba(255,255,255,0.3)'}
+                          fontWeight="bold"
+                        >
+                          {point.label}
+                        </text>
+                        {/* Z轴距离标注 */}
+                        <text
+                          x={30 + i * 30}
+                          y={point.y + 15}
+                          textAnchor="middle"
+                          className="micro"
+                          fill={isActive ? point.color : 'rgba(255,255,255,0.2)'}
+                          fontSize="9"
+                        >
+                          {point.z}m
+                        </text>
+                      </g>
+                    );
+                  })}
+                  
+                  {/* 当前相机位置 - 增强视觉效果 */}
+                  <g>
+                    {/* 外层光晕 */}
+                    <circle cx="90" cy={currentY} r="10" fill={currentColor} opacity="0.15" className="animate-pulse" />
+                    <circle cx="90" cy={currentY} r="7" fill={currentColor} opacity="0.3" />
+                    {/* 相机图标 */}
+                    <circle cx="90" cy={currentY} r="5" fill={currentColor} stroke="white" strokeWidth="2.5" />
+                    {/* 连接线到地平线 */}
+                    <line x1="90" y1={currentY} x2="90" y2="60" stroke={currentColor} strokeWidth="1.5" strokeDasharray="3,2" opacity="0.6" />
+                    {/* Camera标签 */}
+                    <text x="105" y={currentY + 3} className="micro" fill="white" fontWeight="bold">Camera</text>
+                  </g>
+                </>
+              );
+            })()}
+          </svg>
+        </div>
+      )}
     </div>
   );
 }
 
-// Sequence 预览页面组件
+// Sequence 预览页面组件 - 使用 PokerFace (XianBo) 配置
 function SequencePreview({ onClose }: { onClose: () => void }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [viewAngle, setViewAngle] = useState<'top' | 'side' | 'follow' | 'free'>('top');
   const [showComparison, setShowComparison] = useState(false);
 
-  // 模拟 sequence 单元 - 与 Scene3DView 的阶段定义保持一致
+  // PokerFace (XianBo) 的 Sequence 配置 - from_xiaokun 第7个视频
+  const pokerFaceTemplate = { title: 'PokerFace' };
+  
+  // PokerFace 专属 sequence 单元
   const sequenceUnits = [
-    { code: 'F1', name: 'Lead Follow', duration: 6, color: '#00DC82' },
-    { code: 'C2', name: '360度环绕', duration: 12, color: '#00A8E8' },
-    { code: 'C1', name: '缓慢拉远', duration: 8, color: '#0080FF' },
+    { code: 'C15', name: '降旋 + Tracking', duration: 9, color: '#FF6B6B' },
+    { code: 'C14', name: '升旋 + Tracking', duration: 9, color: '#00A8E8' },
+    { code: 'C2', name: '推进 + Tracking', duration: 8, color: '#FFB800' },
   ];
 
   const totalDuration = sequenceUnits.reduce((sum, unit) => sum + unit.duration, 0);
@@ -2328,7 +2638,7 @@ function SequencePreview({ onClose }: { onClose: () => void }) {
           {!showComparison ? (
             /* 单图模式 */
             <div className="w-full h-full relative">
-              <Scene3DView viewAngle={viewAngle} progress={progress} version="optimized" />
+              <Scene3DView viewAngle={viewAngle} progress={progress} version="optimized" template={pokerFaceTemplate} />
             </div>
           ) : (
             /* 对比模式 */
@@ -2337,13 +2647,13 @@ function SequencePreview({ onClose }: { onClose: () => void }) {
                 <div className="absolute top-3 left-3 z-10 px-2.5 py-1 bg-white/[0.08] backdrop-blur-sm rounded-lg border border-white/20">
                   <span className="caption font-bold text-white/70">优化前</span>
                 </div>
-                <Scene3DView viewAngle={viewAngle} progress={progress} version="original" />
+                <Scene3DView viewAngle={viewAngle} progress={progress} version="original" template={pokerFaceTemplate} />
               </div>
               <div className="relative">
                 <div className="absolute top-3 right-3 z-10 px-2.5 py-1 bg-brand/20 backdrop-blur-sm rounded-lg border border-brand/40">
                   <span className="caption font-bold text-brand">优化后</span>
                 </div>
-                <Scene3DView viewAngle={viewAngle} progress={progress} version="optimized" />
+                <Scene3DView viewAngle={viewAngle} progress={progress} version="optimized" template={pokerFaceTemplate} />
               </div>
             </div>
           )}
