@@ -624,19 +624,44 @@ function FeedCard({ item, onSelect }: { item: any; onSelect: () => void }) {
   const [saved, setSaved] = useState(false);
   const [videoError, setVideoError] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            // 进入视野，播放视频
+            if (videoRef.current) {
+              videoRef.current.currentTime = 0;
+              videoRef.current.play().catch(() => {});
+            }
+          } else {
+            // 离开视野，暂停视频
+            if (videoRef.current) {
+              videoRef.current.pause();
+            }
+          }
+        });
+      },
+      { threshold: 0.6 } // 60% 可见时触发
+    );
+
+    if (containerRef.current) {
+      observer.observe(containerRef.current);
+    }
+
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     setVideoError(false);
-    if (videoRef.current) {
-      const playPromise = videoRef.current.play();
-      if (playPromise?.catch) {
-        playPromise.catch(() => {});
-      }
-    }
+    // 移除这里的自动播放逻辑，交给 IntersectionObserver 控制
   }, [item.videoUrl]);
 
   return (
     <div 
+      ref={containerRef}
       className="relative w-full bg-[#0A0A0A] snap-start flex-none"
       style={{ height: '100%' }}
     >
@@ -647,10 +672,9 @@ function FeedCard({ item, onSelect }: { item: any; onSelect: () => void }) {
             ref={videoRef}
             src={item.videoUrl}
             className="w-full h-full object-cover"
-            muted
             loop
             playsInline
-            autoPlay
+            // 移除 autoPlay，由 IntersectionObserver 控制
             onError={() => setVideoError(true)}
             poster={item.thumbnail}
           />

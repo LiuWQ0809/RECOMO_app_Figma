@@ -417,6 +417,7 @@ export default function TemplatePreparePage({ template, onBack, onStartShooting,
       {showPreviewSimulator && (
         <SequencePreview 
           onClose={() => setShowPreviewSimulator(false)}
+          videoUrl={template?.videoUrl}
         />
       )}
     </div>
@@ -1715,7 +1716,6 @@ function SequenceSimulator({
                 ref={videoPlayerRef}
                 src={videoUrl}
                 className="w-full h-full object-contain bg-black"
-                muted
                 playsInline
                 controls
                 onLoadedMetadata={(e) => {
@@ -2554,11 +2554,24 @@ function Scene3DView({
 }
 
 // Sequence 预览页面组件 - 使用 PokerFace (XianBo) 配置
-function SequencePreview({ onClose }: { onClose: () => void }) {
+function SequencePreview({ onClose, videoUrl }: { onClose: () => void; videoUrl?: string }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [viewAngle, setViewAngle] = useState<'top' | 'side' | 'follow' | 'free'>('top');
   const [showComparison, setShowComparison] = useState(false);
+  
+  // 音频播放 ref
+  const audioRef = useRef<HTMLVideoElement>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  
+  // 音频源 - 使用传入的 videoUrl，如果没有则使用默认的 Pokerface
+  // 确保 videoUrl 是有效的，如果为空则回退到默认
+  const audioSrc = useMemo(() => {
+    if (videoUrl && videoUrl.length > 0) {
+      return videoUrl;
+    }
+    return '/data/Pokerface.mp4';
+  }, [videoUrl]);
 
   // PokerFace (XianBo) 的 Sequence 配置 - from_xiaokun 第7个视频
   const pokerFaceTemplate = { title: 'PokerFace' };
@@ -2572,20 +2585,137 @@ function SequencePreview({ onClose }: { onClose: () => void }) {
 
   const totalDuration = sequenceUnits.reduce((sum, unit) => sum + unit.duration, 0);
 
+  // 清理 interval
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
+    };
+  }, []);
+
+  // 同步音频播放位置 - 仅在拖动时或特定操作时调用，不自动监听 progress
+  const syncAudioToProgress = (currentProgress: number) => {
+    if (audioRef.current) {
+      const targetTime = (currentProgress / 100) * totalDuration;
+      const duration = audioRef.current.duration || totalDuration;
+      if (duration > 0) {
+        audioRef.current.currentTime = targetTime % duration;
+      }
+    }
+  };
+
+  // 监听 videoUrl 变化，重置播放状态
+  useEffect(() => {
+    setIsPlaying(false);
+    setProgress(0);
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      audioRef.current.load(); // 重新加载视频源
+    }
+  }, [videoUrl]);
+
   // 播放控制
   const togglePlay = () => {
-    setIsPlaying(!isPlaying);
-    if (!isPlaying) {
-      const interval = setInterval(() => {
+    const newIsPlaying = !isPlaying;
+    setIsPlaying(newIsPlaying);
+    
+    if (newIsPlaying) {
+      // 清除之前可能存在的 interval
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+      
+      // 如果进度已经到 100%，从头开始
+      if (progress >= 100) {
+        setProgress(0);
+        if (audioRef.current) {
+          audioRef.current.currentTime = 0;
+        }
+      } else {
+        // 如果是从中间开始，同步音频位置
+        syncAudioToProgress(progress);
+      }
+      
+      // 开始播放音频
+      if (audioRef.current) {
+        // 确保音量开启
+        audioRef.current.volume = 1.0;
+        audioRef.current.muted = false;
+        const playPromise = audioRef.current.play();
+        if (playPromise !== undefined) {
+          playPromise.catch((err) => {
+            console.log('Audio play failed:', err);
+          });
+        }
+      }
+      
+      // 开始进度更新 - 循环播放
+      intervalRef.current = setInterval(() => {
         setProgress(prev => {
-          if (prev >= 100) {
-            clearInterval(interval);
-            setIsPlaying(false);
-            return 100;
+          const newProgress = prev + (100 / totalDuration) * 0.1;
+          if (newProgress >= 100) {
+            // 重置音频到开头，继续循环
+            if (audioRef.current) {
+              // 不暂停，直接重置时间，保持播放状态
+              audioRef.current.currentTime = 0;
+              // 如果视频因为 loop 属性已经在播放，这里重置时间可能会有冲突，
+              // 但由于我们是手动控制循环，且视频时长可能短于 sequence，
+              // 所以这里强制重置是必要的，以对齐 sequence 的开始。
+              // 如果视频时长 < sequence，视频自己 loop，这里重置会打断它的 loop，
+              // 强制它回到开头，这符合 "Sequence 循环" 的语义。
+            }
+            return 0; // 重置进度，继续循环播放
           }
-          return prev + (100 / totalDuration) * 0.1;
+          return newProgress;
         });
       }, 100);
+    } else {
+      // 暂停
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+      if (audioRef.current) {
+        audioRef.current.pause();
+      }
+    }
+  };
+
+  // 重置到开始
+  const resetToStart = () => {
+    setProgress(0);
+    if (audioRef.current) {
+      audioRef.current.currentTime = 0;
+    }
+  };
+
+  // 跳到结尾
+  const skipToEnd = () => {
+    setProgress(100);
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+    setIsPlaying(false);
+    if (audioRef.current) {
+      audioRef.current.pause();
+    }
+  };
+
+  // 处理进度条拖动
+  const handleProgressChange = (e: any) => {
+    const newProgress = parseFloat(e.target.value);
+    setProgress(newProgress);
+    if (audioRef.current) {
+      const targetTime = (newProgress / 100) * totalDuration;
+      audioRef.current.currentTime = targetTime % (audioRef.current.duration || totalDuration);
     }
   };
 
@@ -2608,6 +2738,22 @@ function SequencePreview({ onClose }: { onClose: () => void }) {
       className="fixed inset-0 bg-black/95 z-50 flex flex-col animate-fade-in"
       onClick={onClose}
     >
+      {/* 隐藏的视频元素用于播放音频 */}
+      <video
+        ref={audioRef}
+        src={audioSrc}
+        playsInline
+        preload="auto"
+        style={{ display: 'none' }}
+        onEnded={() => {
+          // 当音频自然结束时，如果还在播放状态则从头开始
+          if (isPlaying && audioRef.current) {
+            audioRef.current.currentTime = 0;
+            audioRef.current.play().catch(() => {});
+          }
+        }}
+      />
+      
       <div 
         className="flex-1 flex flex-col"
         onClick={(e) => e.stopPropagation()}
@@ -2756,7 +2902,7 @@ function SequencePreview({ onClose }: { onClose: () => void }) {
                 min={0}
                 max={100}
                 value={progress}
-                onChange={(e) => setProgress(parseFloat(e.target.value))}
+                onChange={handleProgressChange}
                 className="w-full h-2 bg-white/10 rounded-full appearance-none cursor-pointer"
                 style={{
                   background: `linear-gradient(to right, ${sequenceUnits[activeUnit].color} 0%, ${sequenceUnits[activeUnit].color} ${progress}%, rgba(255,255,255,0.1) ${progress}%, rgba(255,255,255,0.1) 100%)`,
@@ -2784,7 +2930,7 @@ function SequencePreview({ onClose }: { onClose: () => void }) {
           {/* 播放控制按钮 */}
           <div className="flex items-center justify-center gap-3">
             <button
-              onClick={() => setProgress(0)}
+              onClick={resetToStart}
               className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-sm flex items-center justify-center active:scale-90 transition-all border border-white/20"
             >
               <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20">
@@ -2806,7 +2952,7 @@ function SequencePreview({ onClose }: { onClose: () => void }) {
             </button>
 
             <button
-              onClick={() => setProgress(100)}
+              onClick={skipToEnd}
               className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-sm flex items-center justify-center active:scale-90 transition-all border border-white/20"
             >
               <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20">
